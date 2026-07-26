@@ -67,7 +67,7 @@ echo
 echo "$installed installed, $kept kept -> $dest"
 echo "Restart your Claude Code session to pick them up."
 echo
-echo "Resident (model-invoked): verification-before-completion, diagnosing-bugs, tdd,"
-echo "                          code-review, resolving-merge-conflicts, worktree,"
-echo "                          receiving-code-review"
-echo "Manual (user-invoked):    grill-me, implement"
+echo "Resident (model-invoked): verification-before-completion, receiving-code-review,"
+echo "                          diagnosing-bugs, code-review"
+echo "Manual (user-invoked):    grill-me, implement, tdd, worktree,"
+echo "                          resolving-merge-conflicts"

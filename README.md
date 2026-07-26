@@ -2,7 +2,7 @@
 
 [![ci](https://github.com/zhoukaichaoaa/lean-skills/actions/workflows/ci.yml/badge.svg)](https://github.com/zhoukaichaoaa/lean-skills/actions/workflows/ci.yml)
 
-> 9 个技能。7 个常驻，2 个手动。没有强制条款，没有启动注入。
+> 9 个技能。4 个常驻，5 个手动。没有强制条款，没有启动注入。
 >
 > A lean, context-budgeted skill set for Claude Code — distilled from mattpocock/skills and obra/superpowers. Docs in Chinese, skills in English.
 
@@ -25,23 +25,25 @@
 | 技能 | 防的坏习惯 | 来源 |
 |---|---|---|
 | `verification-before-completion` | 没跑命令就说"修好了" | superpowers，重写 |
-| `diagnosing-bugs` | 不建复现回路，直接猜 bug 原因 | mattpocock，微调 |
-| `tdd` | 先写实现再补测试；测到实现细节上 | mattpocock，原文 |
-| `code-review` | 自己写完自己觉得没问题 | mattpocock，去依赖 |
 | `receiving-code-review` | 评审说啥都点头照做 | superpowers，重写 |
-| `resolving-merge-conflicts` | 冲突了就 `--abort` 或随便选一边 | mattpocock，原文 |
-| `worktree` | 在用户正在用的分支上直接动手 | superpowers，精简 |
+| `diagnosing-bugs` | 硬 bug 不建复现回路就开猜；同一个 bug 连修两刀 | mattpocock，微调 |
+| `code-review` | 自己写完自己觉得没问题 | mattpocock，修 WIP + 去依赖 |
 
 **手动（打斜杠才加载，零上下文成本）**
 
 | 技能 | 用途 | 来源 |
 |---|---|---|
 | `grill-me` | 动手前把需求追问到收敛 | mattpocock，合并 |
-| `implement` | 编排：隔离 → TDD → 验证 → 评审 → 消化反馈 | mattpocock，扩写 |
+| `implement` | 编排：隔离 → 测试先行 → 验证 → 评审 → 交付 | mattpocock，重写 |
+| `tdd` | 测试先行的完整参考（接缝 / 反模式 / 循环规则） | mattpocock，原文 |
+| `worktree` | 开隔离工作区的完整流程 | superpowers，精简 |
+| `resolving-merge-conflicts` | 按意图逐块解冲突 | mattpocock，微调 |
 
 常驻/手动的区分用的是 Claude Code 官方字段 `disable-model-invocation`（[文档](https://code.claude.com/docs/en/skills#control-who-invokes-a-skill)）。官方语义：设为 `true` 时 **description 不进上下文、模型无法调用**，只能由你 `/名字` 触发。
 
-> `worktree` 和 `receiving-code-review` 在 0.1.0 里是手动技能，0.2.0 改为常驻。原因：`implement`（手动）的正文要调它们，而模型对手动技能是**调不到的** —— 手动技能可以调用常驻技能，反之不行。这正是 [DOCTRINE](DOCTRINE.md) 里"另一个技能必须够到它时，才选模型调用"的情形。此外 `receiving-code-review` 的触发点（评审意见到来的那一刻）本就在模型盲区，指望人记得敲斜杠不现实。
+> **分层标准（0.3.0）**：常驻的入场券是双重测试 —— **触发点在模型盲区**（正要说"修好了"、批评刚到、同一个 bug 修第二刀：这些瞬间模型不会觉得自己需要被拦），**且内容是护栏而非教材**（Claude 已掌握工程知识本身，技能补的是行为约束，不是重讲一遍软件工程课）。TDD 和开工作区是工作方式的选择，时机该由你掌控 —— 官方文档也把"想控制时机的工作流"归给 `disable-model-invocation`。`implement` 不再跨层调用它们（模型调不到手动技能），改为内联各自的一句话护栏（接缝先约定、纵切、工作区先问再开、基线先绿），完整版留给手动的 `/tdd` 和 `/worktree`。
+>
+> **适用边界**：这套面向**交互式会话 + 强模型**。长时间无人值守的任务（夜跑代理、批量重构）没有人随时纠偏，superpowers 式的强制前置检查、全量 brainstorming 和细粒度计划在那种场景是安全网，不是税 —— 别拿这套去跑无人值守。
 
 ## 安装
 
@@ -98,18 +100,18 @@ cd lean-skills
 | 一个模块、几个文件 | `/grill-me` → `/implement` |
 | 新系统 / 跨模块重构 | `/grill-me` → `/worktree` → `/implement` |
 
-常驻的 7 个不需要你操心 —— 它们会在该出现的时候自己出现（评审反馈到来时 `receiving-code-review` 会自动接手，不用手动敲）。
+常驻的 4 个不需要你操心 —— 它们会在该出现的时候自己出现（评审反馈到来时 `receiving-code-review` 会自动接手，不用手动敲）。
 
 ### `/implement` 内部做什么
 
 ```
-worktree（可选）
-  → 约定测试接缝 → tdd 逐个纵切
+隔离（大改动先问一句；护栏已内联：分支按票命名 / 目录进 gitignore / 基线先绿）
+  → 约定测试接缝 → 纵切：一个失败测试 → 刚好通过的实现 → 重复
   → typecheck / 单文件测试跑着，最后跑全量
   → verification-before-completion：每个结论都带命令输出
-  → code-review：Standards 轴 + Spec 轴并行
+  → code-review：Standards 轴 + Spec 轴并行（含未提交的 WIP）
   → receiving-code-review：逐条核实评审发现再动手
-  → commit
+  → 交付：diff 摆出来，你点头才 commit
 ```
 
 中途发现是"坏了"而不是"没建"，切到 `diagnosing-bugs`。

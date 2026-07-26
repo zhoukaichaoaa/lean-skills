@@ -1,6 +1,7 @@
 ---
 name: tdd
-description: Test-driven development. Use when the user wants to build features or fix bugs test-first, mentions "red-green-refactor", or wants integration tests.
+description: "Test-driven development reference: what a good test is, seams, anti-patterns, and the rules of the red→green loop."
+disable-model-invocation: true
 ---
 
 # Test-Driven Development
@@ -37,4 +38,4 @@ Ask: "What's the public interface, and which seams should we test?"
 
 ---
 
-_From [mattpocock/skills](https://github.com/mattpocock/skills) `tdd` (MIT), unmodified apart from this attribution. `tests.md` and `mocking.md` copied verbatim._
+_From [mattpocock/skills](https://github.com/mattpocock/skills) `tdd` (MIT); body unmodified apart from this attribution, frontmatter switched to user-invoked in 0.3.0. `tests.md` and `mocking.md` copied verbatim._

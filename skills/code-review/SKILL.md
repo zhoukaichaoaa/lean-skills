@@ -14,13 +14,18 @@ Both axes run as **parallel sub-agents** so they don't pollute each other's cont
 
 ## Process
 
-### 1. Pin the fixed point
+### 1. Pin the fixed point and capture the change
 
 Whatever the user said is the fixed point — a commit SHA, branch name, tag, `main`, `HEAD~5`, etc. If they didn't specify one, ask for it.
 
-Capture the diff command once: `git diff <fixed-point>...HEAD` (three-dot, so the comparison is against the merge-base). Also note the list of commits via `git log <fixed-point>..HEAD --oneline`.
+Confirm it resolves (`git rev-parse <fixed-point>`), then anchor on the merge-base and capture the change once:
 
-Before going further, confirm the fixed point resolves (`git rev-parse <fixed-point>`) and the diff is non-empty. A bad ref or empty diff should fail here — not inside two parallel sub-agents.
+- `BASE=$(git merge-base <fixed-point> HEAD)`
+- `git diff $BASE` — everything since the base, committed **or not**; this is what makes work-in-progress reviewable
+- `git log $BASE..HEAD --oneline` — the commit list (empty is fine when the work is still uncommitted)
+- `git status --porcelain` — untracked files are invisible to diff; any that belong to the change count as additions and must be read
+
+If the combined change is empty, stop here — a bad ref or nothing-to-review should fail before two parallel sub-agents are spawned.
 
 ### 2. Identify the spec source
 
@@ -62,12 +67,14 @@ Send a single message with two `Agent` tool calls. Use the `general-purpose` sub
 **Standards sub-agent prompt** — include:
 
 - The full diff command and commit list.
+- The untracked files identified in step 1, if any — the sub-agent must read them as part of the change.
 - The list of standards-source files you found in step 3, **plus the smell baseline from step 3** pasted in full — the sub-agent has no other access to it.
 - The brief: "Report — per file/hunk where relevant — (a) every place the diff violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Distinguish hard violations from judgement calls — documented-standard breaches can be hard, but baseline smells are always judgement calls, and a documented repo standard overrides the baseline. Skip anything tooling enforces. Under 400 words."
 
 **Spec sub-agent prompt** — include:
 
 - The diff command and commit list.
+- The untracked files identified in step 1, if any.
 - The path or fetched contents of the spec.
 - The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words."
 
@@ -90,4 +97,4 @@ Reporting them separately stops one axis from masking the other.
 
 ---
 
-_Adapted from [mattpocock/skills](https://github.com/mattpocock/skills) `code-review` (MIT). Changes: the issue-tracker lookup no longer requires a setup skill — it uses `gh`/the tracker CLI directly, and falls back to asking._
+_Adapted from [mattpocock/skills](https://github.com/mattpocock/skills) `code-review` (MIT). Changes: the issue-tracker lookup no longer requires a setup skill — it uses `gh`/the tracker CLI directly, and falls back to asking; the diff anchors on the merge-base against the working tree, so uncommitted (WIP) changes are reviewable — upstream's three-dot diff silently missed them._

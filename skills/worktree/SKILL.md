@@ -1,6 +1,7 @@
 ---
 name: worktree
-description: Isolated git workspace. Use when the user asks to work in a worktree, before large multi-file changes worth isolating, or when another skill (implement) calls for isolation.
+description: "Isolated git worktree setup: detect existing isolation, prefer the platform's native tool, verify gitignore, green baseline before work."
+disable-model-invocation: true
 ---
 
 # Worktree
@@ -27,9 +28,10 @@ If they decline, work in place and go to Step 2.
 
 **Native tool first.** If the harness offers one (`EnterWorktree`, `WorktreeCreate`, a `/worktree` command, a `--worktree` flag), use it and skip to Step 2. It owns placement, branching, and cleanup; `git worktree add` alongside it creates state the harness cannot see or clean up.
 
-**Git fallback**, only when no native tool exists:
+**Git fallback**, only when no native tool exists. First pick the branch name — after the ticket or feature (`fix-checkout-retry`); if nothing suggests one, ask:
 
 ```bash
+BRANCH=fix-checkout-retry        # the name chosen above
 git check-ignore -q .worktrees || echo ".worktrees/" >> .gitignore   # then commit
 git worktree add ".worktrees/$BRANCH" -b "$BRANCH"
 cd ".worktrees/$BRANCH"

@@ -63,6 +63,6 @@ jobs:
               assert re.search(r'^description:', fm, re.M), f'{d}: no description'
               (manual if re.search(r'^disable-model-invocation:\s*true', fm, re.M)
                       else resident).append(d)
-          assert len(resident) == 7 and len(manual) == 2, (resident, manual)
+          assert len(resident) == 4 and len(manual) == 5, (resident, manual)
           print('ok: 9 skills,', len(resident), 'resident,', len(manual), 'manual')
           EOF
