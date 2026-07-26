@@ -1,0 +1,19 @@
+{
+  "name": "lean-skills",
+  "description": "9 skills, 5 resident. The parts of mattpocock/skills and obra/superpowers that earn their context cost — no mandatory preamble, no session-start injection.",
+  "version": "0.1.0",
+  "author": {
+    "name": "zhoukaichaoaa"
+  },
+  "homepage": "https://github.com/zhoukaichaoaa/lean-skills",
+  "repository": "https://github.com/zhoukaichaoaa/lean-skills",
+  "license": "MIT",
+  "keywords": [
+    "skills",
+    "tdd",
+    "debugging",
+    "code-review",
+    "context-budget",
+    "minimal"
+  ]
+}
