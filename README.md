@@ -37,13 +37,25 @@
 
 ## 安装
 
+**macOS / Linux**
+
 ```bash
 git clone https://github.com/zhoukaichaoaa/lean-skills.git
 cd lean-skills
-./install.sh          # Windows: .\install.ps1
+./install.sh              # 覆盖前会逐个询问；-y 跳过询问
 ```
 
-技能会被复制到 `~/.claude/skills/`，重启会话生效。
+脚本是 POSIX `sh`，不依赖 bash 4（macOS 自带的是 bash 3.2）。如果提示 `Permission denied`，说明克隆时丢了可执行位，用 `sh install.sh` 或先 `chmod +x install.sh`。
+
+**Windows**
+
+```powershell
+git clone https://github.com/zhoukaichaoaa/lean-skills.git
+cd lean-skills
+.\install.ps1             # 覆盖前会逐个询问；-Yes 跳过询问
+```
+
+两个脚本都把技能复制到 `~/.claude/skills/`，重启会话生效。装到别处：设 `CLAUDE_SKILLS_DIR` 环境变量。
 
 也可以作为插件安装：
 
