@@ -12,7 +12,7 @@ Build the work described in the spec, tickets, or the understanding we just reac
 2. **Agree the seams** you will test at, then build with `tdd` at those seams.
 3. **Keep the loop tight** while working: typecheck often, run the single relevant test file often, run the full suite once at the end.
 4. **Prove it** — `verification-before-completion`. Every claim in your report carries the command output that backs it.
-5. **Review it** — `code-review` against the point you branched from.
+5. **Review it** — `code-review` against the point you branched from. Take the findings through `receiving-code-review`: check each against the codebase before acting on it.
 6. **Commit** to the current branch.
 
 If the work stalls on something broken rather than something unbuilt, stop and switch to `diagnosing-bugs`.

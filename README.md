@@ -103,6 +103,17 @@ worktree（可选）
 
 中途发现是"坏了"而不是"没建"，切到 `diagnosing-bugs`。
 
+### 可选：`CONTEXT.md` 与 ADR
+
+`tdd` 和 `diagnosing-bugs` 里有一句"如果仓库里有 `CONTEXT.md` 就先读它，并尊重相关的 ADR"。这两样本合集不产出，**没有也不影响使用** —— 两处引用都是条件式的。
+
+它们指的是：
+
+- **`CONTEXT.md`** —— 项目的领域词汇表。写清楚这个项目里"订单""租户""结算"各自到底指什么，让测试命名和接口用词都落在同一套语言上。手写一份就行。
+- **ADR**（Architecture Decision Record）—— 记录"为什么这么设计"的短文档，通常放在 `docs/adr/`。防止后来者（包括模型）把有意为之的设计当成疏漏改掉。
+
+想要自动生成这两样，用 mattpocock 的 [`grill-with-docs`](https://github.com/mattpocock/skills/tree/main/skills/engineering/grill-with-docs)，它是一场访谈，产出 `CONTEXT.md` 和 ADR。本合集没有收录它，因为它是一次性投入，不值得占常驻位置。
+
 ## 维护
 
 改技能之前先读 [DOCTRINE.md](DOCTRINE.md) —— 技能设计的一套词汇和原则（源自 mattpocock 的 `writing-great-skills`）。核心几条：
