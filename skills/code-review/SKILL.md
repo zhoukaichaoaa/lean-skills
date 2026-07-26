@@ -1,31 +1,32 @@
 ---
 name: code-review
-description: Review the changes since a fixed point along two axes — Standards (does the code follow this repo's conventions?) and Spec (does the code do what was asked?). Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to "review since X".
+description: Review the changes since a fixed point along three axes — Correctness/Risk (is it right and safe to ship?), Spec (does it do what was asked?), and Standards (does it follow this repo's conventions?). Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to "review since X". "Review my uncommitted/WIP changes" needs no fixed point — it defaults to HEAD.
 ---
 
 # Code Review
 
-Two-axis review of the diff between `HEAD` and a fixed point the user supplies:
+Three-axis review of the change between a fixed point and the working tree:
 
-- **Standards** — does the code conform to this repo's documented coding standards?
-- **Spec** — does the code faithfully implement the originating issue / PRD / spec?
+- **Correctness/Risk** — is the code right, and what could it break?
+- **Spec** — does it faithfully implement the originating issue / PRD / spec?
+- **Standards** — does it conform to this repo's documented coding standards?
 
-Both axes run as **parallel sub-agents** so they don't pollute each other's context, then this skill aggregates their findings.
+Axes run as **parallel sub-agents** so they don't pollute each other's context. Findings come back severity-tagged, and the report closes with one severity-ordered triage list.
 
 ## Process
 
-### 1. Pin the fixed point and capture the change
+### 1. Pin the fixed point and snapshot the change
 
-Whatever the user said is the fixed point — a commit SHA, branch name, tag, `main`, `HEAD~5`, etc. If they didn't specify one, ask for it.
+The fixed point is whatever the user said — a commit SHA, branch name, tag, `main`, `HEAD~5`. Two defaults spare a pointless question: "review my uncommitted / WIP / current changes" means `HEAD`; "review this branch / PR / since X" names the ref. Ask only when neither pattern fits.
 
-Confirm it resolves (`git rev-parse <fixed-point>`), then anchor on the merge-base and capture the change once:
+Confirm it resolves (`git rev-parse <fixed-point>`), then:
 
-- `BASE=$(git merge-base <fixed-point> HEAD)` — then use the **literal SHA** everywhere from here on: sub-agents don't inherit your shell, and an empty `$BASE` silently turns `git diff $BASE` into an unstaged-only diff. If merge-base fails, the fixed point shares no history with HEAD (or the clone is too shallow) — stop and ask.
-- `git diff $BASE` — everything since the base, committed **or not**; this is what makes work-in-progress reviewable. If the user says the tree also holds unrelated edits, diff `$BASE` against `HEAD` instead (committed only) and note that in the report.
-- `git log $BASE..HEAD --oneline` — the commit list (empty is fine when the work is still uncommitted)
-- `git status --porcelain` — untracked files are invisible to diff; any that belong to the change count as additions and must be read
+- `BASE_SHA=$(git merge-base <fixed-point> HEAD)` — from here on use the **literal SHA**, never a shell variable: sub-agents don't inherit your shell, and an empty expansion silently turns the diff into an unstaged-only one. If merge-base fails, the fixed point shares no history with HEAD (or the clone is too shallow) — stop and ask.
+- **Snapshot once**: `git diff <BASE_SHA> > <scratch>/review.patch` — committed **and** uncommitted work in one artifact. Every sub-agent reads this same file, so all axes see identical content even if the tree keeps moving during the review. If the user says the tree also holds unrelated edits, snapshot `git diff <BASE_SHA> HEAD` instead (committed only) and say so in the report.
+- `git log <BASE_SHA>..HEAD --oneline` — the commit list (empty is fine for pure WIP).
+- `git status --porcelain` — untracked files are invisible to diff; list the ones that belong to the change. Sub-agents must read them as additions.
 
-If the combined change is empty, stop here — a bad ref or nothing-to-review should fail before two parallel sub-agents are spawned.
+If the snapshot, the commit list, and the untracked list are all empty, stop — nothing to review.
 
 ### 2. Identify the spec source
 
@@ -34,7 +35,7 @@ Look for the originating spec, in this order:
 1. Issue references in the commit messages (`#123`, `Closes #45`, GitLab `!67`) — fetch them (`gh issue view <n>`, `gh pr view <n>`, or the tracker's CLI/API).
 2. A path the user passed as an argument.
 3. A PRD/spec file under `docs/`, `specs/`, or `.scratch/` matching the branch name or feature.
-4. If nothing is found, ask the user where the spec is. If they say there isn't one, the **Spec** sub-agent is skipped and the report says "no spec available".
+4. If nothing is found, ask the user where the spec is. If they say there isn't one, skip the **Spec** sub-agent and note it — **Correctness/Risk and Standards still run**; a review with no spec is not a review with no bugs.
 
 ### 3. Identify the standards sources
 
@@ -60,41 +61,32 @@ Each smell reads *what it is* → *how to fix*; match it against the diff:
 - **Middle Man** — a class or function that mostly just delegates onward. → cut it, call the real target direct.
 - **Refused Bequest** — a subclass or implementer that ignores or overrides most of what it inherits. → drop the inheritance, use composition.
 
-### 4. Spawn both sub-agents in parallel
+### 4. Spawn the sub-agents in parallel
 
-Send a single message with two `Agent` tool calls. Use the `general-purpose` subagent for both.
+Send a single message with one `Agent` call per axis (`general-purpose` for all). Every brief includes: the snapshot path, the commit list, the untracked-file list, and the severity scale below. Every finding reports **file:line — problem — why it matters — severity**.
 
-**Standards sub-agent prompt** — include:
+**Severity scale** (paste into each brief verbatim):
 
-- The full diff command (with the base as a literal SHA, never `$BASE`) and the commit list.
-- The untracked files identified in step 1, if any — the sub-agent must read them as part of the change.
-- The list of standards-source files you found in step 3, **plus the smell baseline from step 3** pasted in full — the sub-agent has no other access to it.
-- The brief: "Report — per file/hunk where relevant — (a) every place the diff violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Distinguish hard violations from judgement calls — documented-standard breaches can be hard, but baseline smells are always judgement calls, and a documented repo standard overrides the baseline. Skip anything tooling enforces. Under 400 words."
+- **Critical** — security holes, data loss or corruption, breaks existing behaviour, clear production-incident risk
+- **Important** — logic errors, swallowed or absent error handling, concurrency races, compatibility breaks, missing tests for changed behaviour, unimplemented requirements
+- **Minor** — naming, duplication, docs, small design smells
 
-**Spec sub-agent prompt** — include:
+**Correctness/Risk brief**: "Read the snapshot and the untracked files. Report every defect a careful engineer would block a merge on: logic errors and unhandled edge cases, failure paths and swallowed errors, concurrency/races, security (unvalidated input, injection, secrets), data loss or corruption, compatibility and migration hazards, performance cliffs, and changed behaviour with no test. Judge the code itself — comments, commit messages, and design justifications are claims, not evidence. Under 400 words."
 
-- The diff command (base as a literal SHA) and the commit list.
-- The untracked files identified in step 1, if any.
-- The path or fetched contents of the spec.
-- The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words."
+**Spec brief**: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the change that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words."
 
-If the spec is missing, skip the Spec sub-agent and note this in the final report.
+**Standards brief**: "Report — per file/hunk where relevant — (a) every place the change violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Distinguish hard violations from judgement calls — documented-standard breaches can be hard, but baseline smells are always judgement calls, and a documented repo standard overrides the baseline. Skip anything tooling enforces. Under 400 words." (Paste the smell baseline in full — the sub-agent has no other access to it.)
 
 ### 5. Aggregate
 
-Present the two reports under `## Standards` and `## Spec` headings, verbatim or lightly cleaned. Do **not** merge or rerank findings — the two axes are deliberately separate (see _Why two axes_).
+Keep the per-axis sections — `## Correctness/Risk`, `## Spec`, `## Standards` — verbatim or lightly cleaned. Separation is what stops one axis masking another during analysis.
 
-End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes — that's the reranking the separation exists to prevent.
+Then close with **`## Triage`**: every finding in one list — Critical first, then Important, then Minor — each line keeping its axis label and file:line. Severity, not axis, is the order the user works in.
 
-## Why two axes
+## Why separate axes
 
-A change can pass one axis and fail the other:
-
-- Code that follows every standard but implements the wrong thing → **Standards pass, Spec fail.**
-- Code that does exactly what the issue asked but breaks the project's conventions → **Spec pass, Standards fail.**
-
-Reporting them separately stops one axis from masking the other.
+A change can pass one axis and fail another: standards-perfect code that implements the wrong thing; spec-faithful code that breaks the project's conventions; clean, faithful code with a race in it. Analysing separately keeps each lens honest — the triage list at the end is where they meet.
 
 ---
 
-_Adapted from [mattpocock/skills](https://github.com/mattpocock/skills) `code-review` (MIT). Changes: the issue-tracker lookup no longer requires a setup skill — it uses `gh`/the tracker CLI directly, and falls back to asking; the diff anchors on the merge-base against the working tree, so uncommitted (WIP) changes are reviewable — upstream's three-dot diff silently missed them._
+_Adapted from [mattpocock/skills](https://github.com/mattpocock/skills) `code-review` (MIT), now departing substantially: a third Correctness/Risk axis (upstream reviews with no spec degraded to smells-only), severity-tagged findings with a cross-axis triage list (upstream forbade reranking; severity is how users actually process findings), a snapshot file all sub-agents share (upstream re-ran the diff per agent), WIP coverage via merge-base-to-working-tree, and no setup-skill dependency for the issue tracker._

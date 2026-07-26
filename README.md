@@ -27,7 +27,7 @@
 | `verification-before-completion` | 没跑命令就说"修好了" | superpowers，重写 |
 | `receiving-code-review` | 评审说啥都点头照做 | superpowers，重写 |
 | `diagnosing-bugs` | 硬 bug 不建复现回路就开猜；同一个 bug 连修两刀 | mattpocock，微调 |
-| `code-review` | 自己写完自己觉得没问题 | mattpocock，修 WIP + 去依赖 |
+| `code-review` | 自己写完自己觉得没问题 | mattpocock，重构（三轴 + 严重度分诊） |
 
 **手动（打斜杠才加载，零上下文成本）**
 
@@ -67,6 +67,14 @@ cd lean-skills
 
 两个脚本都把技能复制到 `~/.claude/skills/`，重启会话生效。装到别处：设 `CLAUDE_SKILLS_DIR` 环境变量。
 
+**卸载 / 升级**：
+
+```bash
+./install.sh --uninstall      # Windows: .\install.ps1 -Uninstall
+```
+
+只移除本合集的 9 个技能，你自己创建的技能不动。跨版本升级时如果某个技能被改名或删除，普通覆盖不会清掉旧目录 —— 先 `--uninstall` 再装。安装器会拒绝目标目录等于（或位于）仓库自身 `skills/` 的危险配置。
+
 也可以作为插件安装：
 
 ```
@@ -105,11 +113,12 @@ cd lean-skills
 ### `/implement` 内部做什么
 
 ```
-隔离（大改动先问一句；护栏已内联：分支按票命名 / 目录进 gitignore / 基线先绿）
+隔离（大改动先问一句；护栏已内联：分支按票命名 / .git/info/exclude / 基线先绿）
+  → 开工前记下 BASE_SHA（原地修改也有明确的审查起点）
   → 约定测试接缝 → 纵切：一个失败测试 → 刚好通过的实现 → 重复
   → typecheck / 单文件测试跑着，最后跑全量
   → verification-before-completion：每个结论都带命令输出
-  → code-review：Standards 轴 + Spec 轴并行（含未提交的 WIP）
+  → code-review：Correctness / Spec / Standards 三轴并行（含未提交 WIP），按严重度分诊
   → receiving-code-review：逐条核实评审发现再动手
   → 交付：diff 摆出来，你点头才 commit
 ```
@@ -137,6 +146,8 @@ cd lean-skills
 - **一处真相。** 同一个意思出现在两个地方，就是维护成本加倍、且在信息层级上被虚高。
 
 新增技能之前，先用收录标准的三个问题过一遍。加进来容易，删掉难 —— 这就是两个上游仓库都在积累"沉积层"的原因。
+
+版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 归属
 

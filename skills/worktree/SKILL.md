@@ -32,18 +32,18 @@ If they decline, work in place and go to Step 2.
 
 ```bash
 BRANCH=fix-checkout-retry        # the name chosen above
-git check-ignore -q .worktrees || echo ".worktrees/" >> .gitignore   # committing this line is the user's call
+git check-ignore -q .worktrees || echo ".worktrees/" >> .git/info/exclude   # repo-local ignore, touches no tracked file
 git worktree add ".worktrees/$BRANCH" -b "$BRANCH"
 cd ".worktrees/$BRANCH"
 ```
 
-Directory choice, in priority order: an explicit user preference, then an existing `.worktrees/` or `worktrees/` (`.worktrees` wins if both), then `.worktrees/` as the default. Verify it is git-ignored before creating anything inside it — an unignored worktree directory commits the entire tree into the repo.
+Directory choice, in priority order: an explicit user preference, then an existing `.worktrees/` or `worktrees/` (`.worktrees` wins if both), then `.worktrees/` as the default. Verify it is ignored before creating anything inside it — an unignored worktree directory commits the entire tree into the repo. Prefer `.git/info/exclude` over editing `.gitignore`: same effect, no tracked-file change, no commit question. Offer a `.gitignore` entry only if the user wants the ignore shared with the team.
 
-If `git worktree add` fails on a permission error, say the sandbox blocked it and continue in the current directory.
+If the branch or the worktree path already exists, reuse it when it is yours and clean; otherwise pick a new name — `git worktree add` refuses duplicates. If it fails on a permission error, say the sandbox blocked it and continue in the current directory.
 
 ## Step 2 — Setup and baseline
 
-Install dependencies for whatever the project is (`package.json` → `npm install`, `Cargo.toml` → `cargo build`, `pyproject.toml` → `poetry install`, `go.mod` → `go mod download`), then run the test suite once.
+Install dependencies **the way the repo does**, detected from its lockfile: `pnpm-lock.yaml` → pnpm, `yarn.lock` → yarn, `bun.lockb` → bun, `package-lock.json` → npm; `uv.lock` → uv, `poetry.lock` → poetry, `pdm.lock` → pdm, `requirements*.txt` → pip; `Cargo.toml` → cargo, `go.mod` → go. A `packageManager` field in `package.json` outranks lockfile guesses. No lockfile and no documented setup? Say what you found and ask instead of guess-installing. Then run the test suite once.
 
 A green baseline is what makes every later failure attributable to your change. If the baseline is red, report the failures and let the user decide whether to proceed.
 

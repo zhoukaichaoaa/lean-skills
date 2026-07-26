@@ -46,9 +46,11 @@ A 30-second flaky loop is barely better than no loop; a 2-second deterministic o
 
 The goal is not a clean repro but a **higher reproduction rate**. Loop the trigger 100×, parallelise, add stress, narrow timing windows, inject sleeps. A 50%-flake bug is debuggable; 1% is not — keep raising the rate until it's debuggable.
 
-### When you genuinely cannot build a loop
+### When the failure cannot be re-run: the artifact loop
 
-Stop and say so explicitly. List what you tried. Ask the user for: (a) access to whatever environment reproduces it, (b) a captured artifact (HAR file, log dump, core dump, screen recording with timestamps), or (c) permission to add temporary production instrumentation. Do **not** proceed to hypothesise without a loop.
+Some real failures never rerun on your machine — a one-off production incident, a crash dump, a third-party outage that has passed. If (and only if) you have exhausted the list above, downgrade from a runnable loop to an **artifact loop**: gather the evidence that exists (logs, traces, core dump, HAR, crash report, DB snapshot) and treat it as the loop. Phase 3 works the same — every hypothesis must predict something **checkable in the artifacts** ("if X is the cause, the log must show Y between T1 and T2") and dies when the artifacts contradict it. Phases 5–6 still apply in full: the fix still gets a regression test at a seam, and the report says plainly it was verified against artifacts, not a live reproduction.
+
+No runnable loop **and** no artifacts? Stop and say so explicitly. List what you tried. Ask the user for: (a) access to whatever environment reproduces it, (b) captured artifacts (HAR file, log dump, core dump, screen recording with timestamps), or (c) permission to add temporary production instrumentation. Do **not** hypothesise from nothing.
 
 ### Completion criterion — a tight loop that goes red
 
@@ -59,7 +61,7 @@ Phase 1 is done when the loop is **tight** and **red-capable**: you can name **o
 - [ ] **Fast** — seconds, not minutes.
 - [ ] **Agent-runnable** — you can run it unattended.
 
-If you catch yourself reading code to build a theory before this command exists, **stop — jumping straight to a hypothesis is the exact failure this skill prevents.** No red-capable command, no Phase 2.
+If you catch yourself reading code to build a theory before this command exists, **stop — jumping straight to a hypothesis is the exact failure this skill prevents.** No red-capable command, no Phase 2. The one exception is the artifact loop below — a real failure that cannot be re-run, investigated against captured evidence instead.
 
 ## Phase 2 — Reproduce + minimise
 
