@@ -27,7 +27,9 @@ Agreement phrases ("you're absolutely right", "great catch") carry no informatio
 
 ## Disagreeing
 
-Push back when the suggestion breaks existing behaviour, misses context the reviewer didn't have, is wrong for this stack, or adds a feature nothing calls. Grep first — a suggestion to "implement this properly" on an endpoint with no callers is a suggestion to delete it.
+Push back when the suggestion breaks existing behaviour, misses context the reviewer didn't have, or is wrong for this stack.
+
+**YAGNI first.** When a reviewer asks you to "implement this properly", grep for callers before building anything: on an endpoint nothing calls, the honest answer is to delete it, not to flesh it out.
 
 Push back with the specific evidence: the test that would break, the version constraint, the caller that depends on it.
 

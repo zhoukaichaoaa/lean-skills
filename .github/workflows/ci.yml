@@ -64,6 +64,10 @@ jobs:
           guard_refuses "$RUNNER_TEMP/link-src/x/y"        # ...two levels down
           guard_refuses "$PWD/skills" --uninstall        # the delete-only path is guarded too
 
+          # set-but-empty must fail loudly rather than write to $HOME
+          set +e; CLAUDE_SKILLS_DIR="" ./install.sh -y >/dev/null 2>&1; rc=$?; set -e
+          test "$rc" -eq 2 || { echo "empty CLAUDE_SKILLS_DIR should exit 2, got $rc"; exit 1; }
+
           T="$RUNNER_TEMP/skills dir"            # spaces in the path
           CLAUDE_SKILLS_DIR="$T" ./install.sh -y >/dev/null && install_ok "$T"
           mkdir -p "$T/not-ours" && : > "$T/not-ours/SKILL.md"
@@ -118,6 +122,11 @@ jobs:
           # which a marker written into the target cannot detect
           Assert-Refused "$env:RUNNER_TEMP\j1\sub" 'Yes'
           Assert-Refused "$env:RUNNER_TEMP\j1\x\y" 'Yes'
+
+          # Windows drops empty environment variables, so the set-but-empty case
+          # install.sh guards against cannot occur here — asserted, not assumed.
+          $env:CLAUDE_SKILLS_DIR = ''
+          if (Test-Path Env:\CLAUDE_SKILLS_DIR) { throw "Windows kept an empty env var; install.ps1 needs the guard install.sh has" }
 
           $T = Join-Path $env:RUNNER_TEMP 'skills dir'
           $env:CLAUDE_SKILLS_DIR = $T

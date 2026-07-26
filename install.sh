@@ -32,6 +32,12 @@ done
 src=$(CDPATH= cd -- "$(dirname -- "$0")/skills" 2>/dev/null && pwd -P) || {
   echo "skills/ not found next to this script" >&2; exit 1; }
 
+# Set-but-empty is a mistake, not a request for the default: falling back would
+# quietly write to the home directory the caller was trying to override.
+if [ "${CLAUDE_SKILLS_DIR+set}" = set ] && [ -z "$CLAUDE_SKILLS_DIR" ]; then
+  echo "CLAUDE_SKILLS_DIR is set but empty — unset it for the default, or give it a path" >&2
+  exit 2
+fi
 dest=${CLAUDE_SKILLS_DIR:-}
 if [ -z "$dest" ]; then
   [ -n "${HOME:-}" ] || { echo "set HOME or CLAUDE_SKILLS_DIR" >&2; exit 1; }

@@ -26,6 +26,9 @@ $srcAbs = ([IO.Path]::GetFullPath($src)).TrimEnd('\')
 # inside the source, it must not be picked up as a tenth skill and copied into itself.
 $srcDirs = @(Get-ChildItem -Directory -LiteralPath $srcAbs)
 
+# No set-but-empty check here, unlike install.sh: Windows drops empty environment
+# variables outright, so an empty CLAUDE_SKILLS_DIR is indistinguishable from an
+# unset one and the default below is the only sensible reading.
 $dest = if ($env:CLAUDE_SKILLS_DIR) { $env:CLAUDE_SKILLS_DIR } else { Join-Path $HOME '.claude\skills' }
 
 # Track the directories we create, deepest first, so a refused run unwinds exactly
