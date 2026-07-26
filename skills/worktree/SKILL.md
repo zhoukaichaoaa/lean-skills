@@ -1,7 +1,6 @@
 ---
 name: worktree
-description: Set up an isolated workspace before feature work, so the current branch stays untouched.
-disable-model-invocation: true
+description: Isolated git workspace. Use when the user asks to work in a worktree, before large multi-file changes worth isolating, or when another skill (implement) calls for isolation.
 ---
 
 # Worktree

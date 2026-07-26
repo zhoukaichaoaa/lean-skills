@@ -1,7 +1,6 @@
 ---
 name: receiving-code-review
-description: Evaluate review feedback technically before acting on any of it.
-disable-model-invocation: true
+description: Use when code-review findings or reviewer feedback arrive — from the user, a PR thread, or the code-review skill — before implementing any of the suggestions.
 ---
 
 # Receiving Code Review

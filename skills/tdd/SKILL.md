@@ -37,4 +37,4 @@ Ask: "What's the public interface, and which seams should we test?"
 
 ---
 
-_From [mattpocock/skills](https://github.com/mattpocock/skills) `tdd` (MIT), unmodified. `tests.md` and `mocking.md` copied verbatim._
+_From [mattpocock/skills](https://github.com/mattpocock/skills) `tdd` (MIT), unmodified apart from this attribution. `tests.md` and `mocking.md` copied verbatim._

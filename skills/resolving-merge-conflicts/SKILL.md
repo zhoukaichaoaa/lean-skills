@@ -17,4 +17,4 @@ description: Use when a git merge or rebase is in progress and conflicted.
 
 ---
 
-_From [mattpocock/skills](https://github.com/mattpocock/skills) `resolving-merge-conflicts` (MIT), unmodified._
+_From [mattpocock/skills](https://github.com/mattpocock/skills) `resolving-merge-conflicts` (MIT); body unmodified, heading and this attribution added._

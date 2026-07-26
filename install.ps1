@@ -1,9 +1,15 @@
-# Install lean-skills into ~/.claude/skills/  (Windows PowerShell)
-#
-#   .\install.ps1         prompt before overwriting an existing skill
-#   .\install.ps1 -Yes    overwrite without prompting
-#
-# Install elsewhere by setting $env:CLAUDE_SKILLS_DIR first.
+<#
+.SYNOPSIS
+Install lean-skills into ~/.claude/skills/ (Windows PowerShell).
+.DESCRIPTION
+Copies the skills next to this script into the Claude Code personal skills
+directory, prompting before overwriting an existing skill.
+Set CLAUDE_SKILLS_DIR to install somewhere else.
+.PARAMETER Yes
+Overwrite existing skills without prompting.
+.EXAMPLE
+.\install.ps1 -Yes
+#>
 [CmdletBinding()]
 param([switch]$Yes)
 
@@ -41,6 +47,7 @@ Write-Host ""
 Write-Host "$installed installed, $kept kept -> $dest"
 Write-Host "Restart your Claude Code session to pick them up."
 Write-Host ""
-Write-Host "Resident (model-invoked): verification-before-completion, diagnosing-bugs,"
-Write-Host "                          tdd, code-review, resolving-merge-conflicts"
-Write-Host "Manual (user-invoked):    grill-me, implement, worktree, receiving-code-review"
+Write-Host "Resident (model-invoked): verification-before-completion, diagnosing-bugs, tdd,"
+Write-Host "                          code-review, resolving-merge-conflicts, worktree,"
+Write-Host "                          receiving-code-review"
+Write-Host "Manual (user-invoked):    grill-me, implement"

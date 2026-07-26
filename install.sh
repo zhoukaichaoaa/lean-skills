@@ -45,7 +45,7 @@ for dir in "$src"/*/; do
   if [ -e "$dest/$name" ] && [ "$assume_yes" -eq 0 ]; then
     reply=''
     if [ "$have_tty" -eq 1 ]; then
-      printf 'overwrite existing %s? [y/N] ' "$name"
+      printf 'overwrite existing %s? [y/N] ' "$name" >&2
       read -r reply < /dev/tty 2>/dev/null || reply=''
     elif [ "$warned" -eq 0 ]; then
       echo "No terminal for prompts — existing skills kept. Rerun with -y to overwrite." >&2
@@ -67,6 +67,7 @@ echo
 echo "$installed installed, $kept kept -> $dest"
 echo "Restart your Claude Code session to pick them up."
 echo
-echo "Resident (model-invoked): verification-before-completion, diagnosing-bugs,"
-echo "                          tdd, code-review, resolving-merge-conflicts"
-echo "Manual (user-invoked):    grill-me, implement, worktree, receiving-code-review"
+echo "Resident (model-invoked): verification-before-completion, diagnosing-bugs, tdd,"
+echo "                          code-review, resolving-merge-conflicts, worktree,"
+echo "                          receiving-code-review"
+echo "Manual (user-invoked):    grill-me, implement"

@@ -86,4 +86,4 @@
 
 ---
 
-_浓缩自 [mattpocock/skills · writing-great-skills](https://github.com/mattpocock/skills/blob/main/skills/productivity/writing-great-skills/SKILL.md)，MIT © 2026 Matt Pocock。完整原文含 GLOSSARY.md，建议对照阅读。_
+_浓缩自 [mattpocock/skills · writing-great-skills](https://github.com/mattpocock/skills/blob/main/skills/productivity/writing-great-skills/SKILL.md)，MIT © 2026 Matt Pocock。建议对照完整原文及其 [GLOSSARY.md](https://github.com/mattpocock/skills/blob/main/skills/productivity/writing-great-skills/GLOSSARY.md) 阅读。_

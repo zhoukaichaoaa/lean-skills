@@ -1,6 +1,10 @@
 # lean-skills
 
-> 9 个技能。5 个常驻，4 个手动。没有强制条款，没有启动注入。
+[![ci](https://github.com/zhoukaichaoaa/lean-skills/actions/workflows/ci.yml/badge.svg)](https://github.com/zhoukaichaoaa/lean-skills/actions/workflows/ci.yml)
+
+> 9 个技能。7 个常驻，2 个手动。没有强制条款，没有启动注入。
+>
+> A lean, context-budgeted skill set for Claude Code — distilled from mattpocock/skills and obra/superpowers. Docs in Chinese, skills in English.
 
 从 [mattpocock/skills](https://github.com/mattpocock/skills)（41 个技能）和 [obra/superpowers](https://github.com/obra/superpowers)（14 个技能）里挑出真正抵得上上下文成本的部分，去掉重叠、去掉强制、去掉对安装脚本的依赖，合成一套可以直接用的最小集。
 
@@ -24,16 +28,20 @@
 | `diagnosing-bugs` | 不建复现回路，直接猜 bug 原因 | mattpocock，微调 |
 | `tdd` | 先写实现再补测试；测到实现细节上 | mattpocock，原文 |
 | `code-review` | 自己写完自己觉得没问题 | mattpocock，去依赖 |
+| `receiving-code-review` | 评审说啥都点头照做 | superpowers，重写 |
 | `resolving-merge-conflicts` | 冲突了就 `--abort` 或随便选一边 | mattpocock，原文 |
+| `worktree` | 在用户正在用的分支上直接动手 | superpowers，精简 |
 
 **手动（打斜杠才加载，零上下文成本）**
 
 | 技能 | 用途 | 来源 |
 |---|---|---|
 | `grill-me` | 动手前把需求追问到收敛 | mattpocock，合并 |
-| `implement` | 编排：隔离 → TDD → 验证 → 评审 | mattpocock，扩写 |
-| `worktree` | 建隔离工作区，保护当前分支 | superpowers，精简 |
-| `receiving-code-review` | 治"评审说啥都点头照做" | superpowers，重写 |
+| `implement` | 编排：隔离 → TDD → 验证 → 评审 → 消化反馈 | mattpocock，扩写 |
+
+常驻/手动的区分用的是 Claude Code 官方字段 `disable-model-invocation`（[文档](https://code.claude.com/docs/en/skills#control-who-invokes-a-skill)）。官方语义：设为 `true` 时 **description 不进上下文、模型无法调用**，只能由你 `/名字` 触发。
+
+> `worktree` 和 `receiving-code-review` 在 0.1.0 里是手动技能，0.2.0 改为常驻。原因：`implement`（手动）的正文要调它们，而模型对手动技能是**调不到的** —— 手动技能可以调用常驻技能，反之不行。这正是 [DOCTRINE](DOCTRINE.md) 里"另一个技能必须够到它时，才选模型调用"的情形。此外 `receiving-code-review` 的触发点（评审意见到来的那一刻）本就在模型盲区，指望人记得敲斜杠不现实。
 
 ## 安装
 
@@ -76,6 +84,8 @@ cd lean-skills
 
 或保留插件，把 `~/.claude/plugins/cache/superpowers-marketplace/superpowers/*/hooks/hooks.json` 改成 `{"hooks":{}}`（注意插件更新会覆盖）。
 
+装着 mattpocock/skills 插件的话没有 hook 冲突，但会重名：`tdd`、`code-review`、`implement` 等两边都有，模型会同时看到两份 description。建议按需二选一。
+
 ## 用法
 
 ### 先分档
@@ -86,9 +96,9 @@ cd lean-skills
 |---|---|
 | 意图明确、影响面清楚 | 不调任何技能。改完跑测试，把真实输出贴出来 |
 | 一个模块、几个文件 | `/grill-me` → `/implement` |
-| 新系统 / 跨模块重构 | `/grill-me` → `/worktree` → `/implement` → `/receiving-code-review` |
+| 新系统 / 跨模块重构 | `/grill-me` → `/worktree` → `/implement` |
 
-常驻的 5 个不需要你操心 —— 它们会在该出现的时候自己出现。
+常驻的 7 个不需要你操心 —— 它们会在该出现的时候自己出现（评审反馈到来时 `receiving-code-review` 会自动接手，不用手动敲）。
 
 ### `/implement` 内部做什么
 
@@ -98,6 +108,7 @@ worktree（可选）
   → typecheck / 单文件测试跑着，最后跑全量
   → verification-before-completion：每个结论都带命令输出
   → code-review：Standards 轴 + Spec 轴并行
+  → receiving-code-review：逐条核实评审发现再动手
   → commit
 ```
 
