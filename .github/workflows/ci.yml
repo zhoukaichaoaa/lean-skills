@@ -1,0 +1,68 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install.sh (fresh, then overwrite)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          if grep -q $'\r' install.sh; then echo "CRLF found in install.sh"; exit 1; fi
+          test -x install.sh
+          sh -n install.sh
+          export CLAUDE_SKILLS_DIR="$RUNNER_TEMP/skills"
+          ./install.sh -y
+          test "$(find "$CLAUDE_SKILLS_DIR" -name SKILL.md | wc -l)" -eq 9
+          ./install.sh -y
+          test "$(find "$CLAUDE_SKILLS_DIR" -name SKILL.md | wc -l)" -eq 9
+
+      - name: install.ps1 (fresh, then overwrite)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          Set-ExecutionPolicy -Scope Process Bypass -Force
+          $env:CLAUDE_SKILLS_DIR = Join-Path $env:RUNNER_TEMP 'skills'
+          .\install.ps1 -Yes
+          $n = (Get-ChildItem -Recurse -Filter SKILL.md -LiteralPath $env:CLAUDE_SKILLS_DIR).Count
+          if ($n -ne 9) { throw "expected 9 SKILL.md, got $n" }
+          .\install.ps1 -Yes
+          $n = (Get-ChildItem -Recurse -Filter SKILL.md -LiteralPath $env:CLAUDE_SKILLS_DIR).Count
+          if ($n -ne 9) { throw "expected 9 SKILL.md after overwrite, got $n" }
+
+      - name: manifests and frontmatter
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          python3 - <<'EOF'
+          import io, json, os, re
+          for p in ('.claude-plugin/plugin.json', '.claude-plugin/marketplace.json'):
+              json.load(io.open(p, encoding='utf-8'))
+          resident, manual = [], []
+          for d in sorted(os.listdir('skills')):
+              text = io.open(f'skills/{d}/SKILL.md', encoding='utf-8').read()
+              m = re.match(r'^---\n(.*?)\n---\n', text, re.S)
+              assert m, f'{d}: no frontmatter'
+              fm = m.group(1)
+              name = re.search(r'^name:\s*(\S+)', fm, re.M)
+              assert name and name.group(1) == d, f'{d}: name/dir mismatch'
+              assert re.search(r'^description:', fm, re.M), f'{d}: no description'
+              (manual if re.search(r'^disable-model-invocation:\s*true', fm, re.M)
+                      else resident).append(d)
+          assert len(resident) == 7 and len(manual) == 2, (resident, manual)
+          print('ok: 9 skills,', len(resident), 'resident,', len(manual), 'manual')
+          EOF
