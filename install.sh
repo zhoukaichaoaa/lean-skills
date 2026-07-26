@@ -148,6 +148,5 @@ echo "$installed installed, $kept kept -> $dest_abs"
 echo "Restart your Claude Code session to pick them up. Remove later with --uninstall."
 echo
 echo "Resident (model-invoked): verification-before-completion, receiving-code-review,"
-echo "                          diagnosing-bugs, code-review"
-echo "Manual (user-invoked):    grill-me, implement, tdd, worktree,"
-echo "                          resolving-merge-conflicts"
+echo "                          diagnosing-bugs, code-review, resolving-merge-conflicts"
+echo "Manual (user-invoked):    grill-me, implement, tdd, worktree"

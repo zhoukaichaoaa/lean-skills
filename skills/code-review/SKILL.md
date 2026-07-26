@@ -34,10 +34,11 @@ If the snapshot, the commit list, and the untracked list are all empty, stop —
 
 Look for the originating spec, in this order:
 
-1. Issue references in the commit messages (`#123`, `Closes #45`, GitLab `!67`) — fetch them (`gh issue view <n>`, `gh pr view <n>`, or the tracker's CLI/API).
-2. A path the user passed as an argument.
-3. A PRD/spec file under `docs/`, `specs/`, or `.scratch/` matching the branch name or feature.
-4. If nothing is found, ask the user where the spec is. If they say there isn't one, skip the **Spec** sub-agent and note it — **Correctness/Risk and Standards still run**; a review with no spec is not a review with no bugs.
+1. A path the user passed as an argument.
+2. Issue references in the commit messages (`#123`, `Closes #45`, GitLab `!67`) — fetch them (`gh issue view <n>`, `gh pr view <n>`, or the tracker's CLI/API). A tracker issue is shared and authoritative; prefer it over anything local.
+3. A plan document from `/grill-me`, in `$(git rev-parse --git-common-dir)/../.plans` — that path resolves to the main checkout from inside a worktree too, where an untracked `.plans/` never appears. On local work this is usually the only spec there is, and its Decisions and Out of scope sections are exactly what the Spec axis needs. **Take one only if it matches this change** — its slug or title names the branch/feature, and it was modified at or after the base commit's date. Several candidates, or none that match: ask rather than guess. A stale plan from another feature produces confident, entirely fictional findings.
+4. A PRD/spec file under `docs/`, `specs/`, or `.scratch/` matching the branch name or feature.
+5. If nothing is found, ask the user where the spec is. If they say there isn't one, skip the **Spec** sub-agent and note it — **Correctness/Risk and Standards still run**; a review with no spec is not a review with no bugs.
 
 Whatever you find here has to be pasted into the Spec brief in step 4 — a tracker issue you fetched lives only in your context.
 
@@ -77,7 +78,7 @@ Send a single message with one `Agent` call per axis (`general-purpose` for all)
 
 **Correctness/Risk brief**: "Read the snapshot and the untracked files. Report every defect a careful engineer would block a merge on: logic errors and unhandled edge cases, failure paths and swallowed errors, concurrency/races, security (unvalidated input, injection, secrets), data loss or corruption, compatibility and migration hazards, performance cliffs, and changed behaviour with no test. Judge the code itself — comments, commit messages, and design justifications are claims, not evidence. Under 400 words."
 
-**Spec brief** — paste the **spec itself** (its full text when you fetched it from a tracker, its path when it's a file in the repo; a tracker issue exists only in your context): "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the change that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words."
+**Spec brief** — paste the **spec itself** (its full text when you fetched it from a tracker, its path when it's a file in the repo; a tracker issue exists only in your context): "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the change that wasn't asked for — check it against the spec's Out of scope section if it has one; (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words."
 
 **Standards brief** — paste the **smell baseline in full** and list the **standards-source file paths** from step 3; the sub-agent has no other access to either: "Report — per file/hunk where relevant — (a) every place the change violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Distinguish hard violations from judgement calls — documented-standard breaches can be hard, but baseline smells are always judgement calls, and a documented repo standard overrides the baseline. Skip anything tooling enforces. Under 400 words."
 

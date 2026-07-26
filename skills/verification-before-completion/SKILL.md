@@ -26,13 +26,13 @@ Evidence is output produced after your last edit. A run from before it describes
 | Build succeeds | Build command, exit 0 — a green linter says nothing about compilation |
 | Bug fixed | The user's original symptom re-tested, now absent |
 | Regression test works | Red → green confirmed: revert the fix, watch it fail, restore |
-| Requirements met | Line-by-line pass over the spec, each item matched to code |
+| Requirements met | Line-by-line pass over the plan or spec — each decision matched to code, or named as deferred |
 | Subagent finished | The VCS diff, read by you |
 | Lint clean | Linter output over the whole target, 0 errors |
 
 ## Completion criterion
 
-You may make the claim once you can quote, in the same message, the command you ran and the span of output that proves it.
+You may make the claim once you can quote, in the same message, the command you ran and the span of output that proves it. Where a plan or spec exists, "done" also means every decision in it is accounted for — built, deferred, or dropped with a reason.
 
 Until then, report the real state: what changed, what you have not run yet, what you expect to happen.
 

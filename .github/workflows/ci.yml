@@ -160,7 +160,7 @@ jobs:
               assert re.search(r'^description:', fm, re.M), f'{d}: no description'
               (manual if re.search(r'^disable-model-invocation:\s*true', fm, re.M)
                       else resident).append(d)
-          assert len(resident) == 4 and len(manual) == 5, (resident, manual)
+          assert len(resident) == 5 and len(manual) == 4, (resident, manual)
           # the installers and the plugin blurb restate these lists; keep them honest
           for path in ('install.sh', 'install.ps1'):
               blob = io.open(path, encoding='utf-8').read()

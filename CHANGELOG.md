@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.6.0 — 2026-07-27
+
+**`/grill-me` 现在产出书面计划。** 此前它止于"我们聊明白了"，会话一结束决策就蒸发。真正的代价不止是没记录 —— **`code-review` 的 Spec 轴因此在本地开发中长期空转**：它按顺序找 spec（用户给的路径 → commit 里的 issue 号 → `docs/`/`specs/` 下的文件），一次典型的本地开发这些一个都不存在，于是整个 Spec 子代理被跳过，三轴评审退化成两轴。
+
+计划文档一次接通三条轨道：`implement` 照着建、`verification-before-completion` 逐条核对交代、`code-review` 的 Spec 轴终于有 spec 可对（Out of scope 一节让范围蔓延在评审里现形）。
+
+- `grill-me`：新增计划模板（Problem / Decisions 附理由 / Seams / Out of scope / Open questions），默认落 `.plans/`，走 `.git/info/exclude` 不脏 git status，**不自动提交**。完成判据升级为可检查：每条已决分支出现在 Decisions 且带理由、每条延后分支出现在 Open questions、文件已写、用户确认与共识一致
+- `implement`：第 1 步读计划（没有且改动不小则建议先 grill）；接缝取自计划；第 7 步把计划作为 spec 传给 code-review；新增计划漂移出口——实现中发现决策有误，与用户修订计划而不是默默改建别的
+- `code-review`：spec 发现顺序把 `/grill-me` 的计划提到第 2 位（本地开发通常是唯一存在的 spec）；Spec brief 显式对照 Out of scope 查范围蔓延
+- `verification-before-completion`：需求行改为"逐条对照计划或 spec，每条决策落到代码或标注延后"；完成判据补一句——测试通过只证明代码能跑，不证明它是被要求的那个代码
+
+理由写进 Decisions 是刻意的：没有理由的决策清单，下周的读者（包括我自己）会把已经定下的问题重新吵一遍。
+
+### 两名独立审计员复审后的修正（发布前，全部经复现验证）
+
+**Critical —— 我自己推荐的流程会打断我自己刚建的机制。** README 把"`/grill-me` → `/worktree` → `/implement`"定为大改动的推荐路径，而计划默认写在 `.plans/`（未跟踪 + exclude）。实测：**未跟踪文件不进 linked worktree，exclude 规则却会跟进去**。于是 worktree 里找不到计划，`implement` 会让用户把刚做完的访谈重做一遍，`code-review` 落回后续项最终跳过 Spec 子代理 —— 正是本版要修的空转，在官方推荐路径上原样复发。修法是一条通吃的表达式：**`$(git rev-parse --git-common-dir)/../.plans`**，在主检出和 worktree 里都指向主检出，同时把此前散落四处的 `.plans/` 默认值收敛成一条规则。
+
+- `code-review`：计划命中加硬判据（slug/标题匹配当前分支或特性、修改时间不早于基点提交；命中多个或都不匹配就问）—— 一份上周为别的特性写的陈旧计划会产出一整批言之凿凿的假发现，比没有 spec 更糟。issue 引用**放回计划之前**：tracker 是共享且权威的。（上一版把 issue 从第 1 位降到第 3 位是未记录的行为变更，此处一并纠正。）
+- `grill-me`：完成判据补上 **Seams to test** 与 **Out of scope** —— 这两节分别是 `implement` 和 `code-review` 的实际依赖，此前可以整节空着仍判定"做完"；再补一条零上下文可读性检查（写"照讨论执行"不算决策）。落盘补幂等 exclude、非 git 目录、同名文件已存在三种情形。
+- `implement`：第 6 步前**重读计划** —— 长任务跑到中途上下文被压缩，计划就没了，后面"每条决策都有交代"和"把计划传给 code-review"全部落空。恢复被误删的"手动技能你调不到"护栏，措辞统一为"请用户运行"。
+- `resolving-merge-conflicts` **升为常驻**，并修好一处照做会出错的机制：原文让用 `git stash list` / `ORIG_HEAD` 找出合并前就脏的文件，实测这两者产不出该清单（用户没 stash 时 `stash list` 为空，`ORIG_HEAD` 只是个 SHA），而完成判据却依赖这个产不出的输入。改用 `git status --porcelain` 的两列语义：**第一列为空 = 仅工作区改动 = 用户的未提交工作**。升常驻的理由：冲突不是用户"想调技能"的时刻，是模型 `git pull` 之后自己撞上的时刻 —— 盲区触发，333 词最瘦，误触发率近乎为零，而失效后果（把用户 WIP 卷进合并提交）不可逆。
+- `worktree`：新增 Step 3 拆解 —— worktree 和计划都被 exclude，**永远不出现在 `git status` 里**，堆积无人提醒。同时删掉 baseline 段落的逐字重复（0.5.0 的 CHANGELOG 声称"统一为一处"，实为加了新的没删旧的 —— 此处订正该说法）。
+- README：新增装完的冒烟测试、单个技能的关闭方法；如实说明 **`code-review` 常驻靠的是编排可达性、不是盲区**（它的触发条件全部由用户发起）；"基线先绿"改为"基线先跑"。
+
+**未采纳**：新增"不可逆动作确认闸门"技能（Claude Code 的权限系统已在工具层拦截破坏性命令；但审计指出的 `PreToolUse` hook 思路成立 —— 本合集反对的是 SessionStart 全文注入，不是 hook 机制本身，这一点此前表述过宽）；瘦身 `tdd` 并删除 `tests.md`/`mocking.md`（它是手动技能，零常驻成本，用户敲 `/tdd` 时要的正是完整参考；代价是 DOCTRINE 的否定式条款对两个上游执行了不同标准，如实记在此）；CI 里加触发 eval（需要凭据且非确定性，会让 CI 变脆——但这仍是本合集最大的未验证项）。
+
 ## 0.5.1 — 2026-07-27
 
 补上审计里唯一漏改的一条，以及由此牵出的一个平台事实：

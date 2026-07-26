@@ -50,7 +50,9 @@ Install dependencies **the way the repo does**. Node: a `packageManager` field i
 
 Then run the test suite once and **report the result as it is**. A green baseline is what makes later failures attributable to your change; a red one is information the user needs before you start, and whether to proceed is their call.
 
-A green baseline is what makes every later failure attributable to your change. If the baseline is red, report the failures and let the user decide whether to proceed.
+## Step 3 — Tear down when the work lands
+
+Worktrees and their installed dependencies do not clean themselves up, and an ignored directory never shows in `git status` — they accumulate silently. Once the branch is merged or abandoned: `git worktree remove <path>` (`--force` only when you mean to discard what is in it), then delete the branch if it has served its purpose. Tell the user when you have done this, and when you haven't.
 
 ## Completion criterion
 

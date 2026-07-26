@@ -2,7 +2,7 @@
 
 [![ci](https://github.com/zhoukaichaoaa/lean-skills/actions/workflows/ci.yml/badge.svg)](https://github.com/zhoukaichaoaa/lean-skills/actions/workflows/ci.yml)
 
-> 9 个技能。4 个常驻，5 个手动。没有强制条款，没有启动注入。
+> 9 个技能。5 个常驻，4 个手动。没有强制条款，没有启动注入。
 >
 > A lean, context-budgeted skill set for Claude Code — distilled from mattpocock/skills and obra/superpowers. Docs in Chinese, skills in English.
 
@@ -27,20 +27,22 @@
 | `verification-before-completion` | 没跑命令就说"修好了" | superpowers，重写 |
 | `receiving-code-review` | 评审说啥都点头照做 | superpowers，重写 |
 | `diagnosing-bugs` | 硬 bug 不建复现回路就开猜；同一个 bug 连修两刀 | mattpocock，微调 |
-| `code-review` | 自己写完自己觉得没问题 | mattpocock，重构（三轴 + 严重度分诊） |
+| `code-review` | 评审只对着代码规范、不对着"当初要的是什么" | mattpocock，重构（三轴 + 严重度分诊） |
+| `resolving-merge-conflicts` | 冲突了就 `--abort`、随便选一边、或 `git add -A` 把你的 WIP 卷进合并提交 | mattpocock，微调 |
 
 **手动（打斜杠才加载，零上下文成本）**
 
 | 技能 | 用途 | 来源 |
 |---|---|---|
-| `grill-me` | 动手前把需求追问到收敛 | mattpocock，合并 |
-| `implement` | 编排：隔离 → 测试先行 → 验证 → 评审 → 交付 | mattpocock，重写 |
+| `grill-me` | 动手前把需求追问到收敛，**并落成书面计划** | mattpocock，合并 + 扩写 |
+| `implement` | 编排：读计划 → 隔离 → 测试先行 → 验证 → 评审 → 交付 | mattpocock，重写 |
 | `tdd` | 测试先行的完整参考（接缝 / 反模式 / 循环规则） | mattpocock，原文 |
 | `worktree` | 开隔离工作区的完整流程 | superpowers，精简 |
-| `resolving-merge-conflicts` | 按意图逐块解冲突 | mattpocock，微调 |
 
 常驻/手动的区分用的是 Claude Code 官方字段 `disable-model-invocation`（[文档](https://code.claude.com/docs/en/skills#control-who-invokes-a-skill)）。官方语义：设为 `true` 时 **description 不进上下文、模型无法调用**，只能由你 `/名字` 触发。
 
+> **`code-review` 常驻的理由与其他四个不同**，如实说明：它的触发点几乎都是用户主动发起的（"审一下这个分支"），不在盲区。它常驻是因为 `implement`（手动技能）必须够得到它 —— **可达性，不是盲区**。想改成手动的话，代价是 `/implement` 的评审环节断掉。
+>
 > **分层标准（0.3.0）**：常驻的入场券是双重测试 —— **触发点在模型盲区**（正要说"修好了"、批评刚到、同一个 bug 修第二刀：这些瞬间模型不会觉得自己需要被拦），**且内容是护栏而非教材**（Claude 已掌握工程知识本身，技能补的是行为约束，不是重讲一遍软件工程课）。TDD 和开工作区是工作方式的选择，时机该由你掌控 —— 官方文档也把"想控制时机的工作流"归给 `disable-model-invocation`。`implement` 不再跨层调用它们（模型调不到手动技能），改为内联各自的一句话护栏（接缝先约定、纵切、工作区先问再开、基线先绿），完整版留给手动的 `/tdd` 和 `/worktree`。
 >
 > **适用边界**：这套面向**交互式会话 + 强模型**。长时间无人值守的任务（夜跑代理、批量重构）没有人随时纠偏，superpowers 式的强制前置检查、全量 brainstorming 和细粒度计划在那种场景是安全网，不是税 —— 别拿这套去跑无人值守。
@@ -108,22 +110,43 @@ cd lean-skills
 |---|---|
 | 意图明确、影响面清楚 | 不调任何技能。改完跑测试，把真实输出贴出来 |
 | 一个模块、几个文件 | `/grill-me` → `/implement` |
-| 新系统 / 跨模块重构 | `/grill-me` → `/worktree` → `/implement` |
+| 新系统 / 跨模块重构 | `/grill-me` → `/worktree` → `/implement` → 完事后 `git worktree remove` |
 
-常驻的 4 个不需要你操心 —— 它们会在该出现的时候自己出现（评审反馈到来时 `receiving-code-review` 会自动接手，不用手动敲）。
+常驻的 5 个不需要你操心 —— 它们会在该出现的时候自己出现（评审反馈到来时 `receiving-code-review` 自动接手；`git pull` 撞上冲突时 `resolving-merge-conflicts` 自动接手）。
+
+**装完先做个冒烟测试**：新开一个会话，敲 `/`，应当看到 `grill-me`、`implement`、`tdd`、`worktree` 四个手动技能（常驻的 5 个不出现在斜杠列表里是正常的）。看不到就是没装上或没重启会话。
+
+**不想要某一个**：`rm -rf ~/.claude/skills/<名字>` 即可，但下次 `./install.sh` 会把它装回来 —— 长期不要就从你的 fork 里删掉那个目录。
 
 ### `/implement` 内部做什么
 
 ```
-隔离（大改动先问一句；护栏已内联：分支按票命名 / .git/info/exclude / 基线先绿）
+读 /grill-me 写下的计划（没有且改动不小 → 先去 grill）
+  → 隔离（大改动先问一句；分支按票命名 / .git/info/exclude / 基线先跑）
   → 开工前记下 BASE_SHA（原地修改也有明确的审查起点）
-  → 约定测试接缝 → 纵切：一个失败测试 → 刚好通过的实现 → 重复
+  → 按计划里约定的接缝纵切：一个失败测试 → 刚好通过的实现 → 重复
   → typecheck / 单文件测试跑着，最后跑全量
-  → verification-before-completion：每个结论都带命令输出
+  → verification-before-completion：每个结论都带命令输出，计划里每条决策都有交代
   → code-review：Correctness / Spec / Standards 三轴并行（含未提交 WIP），按严重度分诊
   → receiving-code-review：逐条核实评审发现再动手
   → 交付：diff 摆出来，你点头才 commit
 ```
+
+### 为什么计划是这套流程的枢纽
+
+`/grill-me` 只留下"我们聊明白了"的感觉，会话一结束就蒸发。更要命的是 **`code-review` 的 Spec 轴会因此空转** —— 它按顺序找 spec（用户给的路径 → commit 里的 issue 号 → `docs/` 下的文件），本地开发这些通常一个都不存在，问过用户之后 Spec 子代理被跳过，三轴退化成两轴，"做的是不是当初要的东西"这条线断掉。
+
+书面计划一次接通三条轨道：
+
+| 消费者 | 用计划的哪部分 |
+|---|---|
+| `implement` | Decisions 照着建，Seams 决定测在哪（第 6 步前重读一遍——长任务里它早被压缩掉了） |
+| `verification-before-completion` | 逐条核对"每个决策是否有交代"——测试通过只证明代码能跑，不证明它是被要求的那个代码 |
+| `code-review` 的 Spec 轴 | 终于有 spec 可对；Out of scope 一节让范围蔓延在评审里现形 |
+
+计划写在 **`$(git rev-parse --git-common-dir)/../.plans`** —— 这个表达式在主检出和 linked worktree 里都指向主检出。直接写 `.plans/` 会踩一个坑：未跟踪文件**不会**进入 linked worktree，而 exclude 规则会，于是"先 `/worktree` 再 `/implement`"的推荐流程里，计划在 worktree 内找不到，Spec 轴又退回空转。三处（写、读、评审）用的是同一条表达式，改位置要三处一起改。
+
+不自动提交 —— 和本合集其他地方一样，提交是你的决定。用完记得 `git worktree remove`：worktree 和计划都被 exclude，**永远不出现在 `git status` 里**，不会有人提醒你它们在堆积。
 
 中途发现是"坏了"而不是"没建"，切到 `diagnosing-bugs`。
 
