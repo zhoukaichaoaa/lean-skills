@@ -20,8 +20,8 @@ Whatever the user said is the fixed point — a commit SHA, branch name, tag, `m
 
 Confirm it resolves (`git rev-parse <fixed-point>`), then anchor on the merge-base and capture the change once:
 
-- `BASE=$(git merge-base <fixed-point> HEAD)`
-- `git diff $BASE` — everything since the base, committed **or not**; this is what makes work-in-progress reviewable
+- `BASE=$(git merge-base <fixed-point> HEAD)` — then use the **literal SHA** everywhere from here on: sub-agents don't inherit your shell, and an empty `$BASE` silently turns `git diff $BASE` into an unstaged-only diff. If merge-base fails, the fixed point shares no history with HEAD (or the clone is too shallow) — stop and ask.
+- `git diff $BASE` — everything since the base, committed **or not**; this is what makes work-in-progress reviewable. If the user says the tree also holds unrelated edits, diff `$BASE` against `HEAD` instead (committed only) and note that in the report.
 - `git log $BASE..HEAD --oneline` — the commit list (empty is fine when the work is still uncommitted)
 - `git status --porcelain` — untracked files are invisible to diff; any that belong to the change count as additions and must be read
 
@@ -66,14 +66,14 @@ Send a single message with two `Agent` tool calls. Use the `general-purpose` sub
 
 **Standards sub-agent prompt** — include:
 
-- The full diff command and commit list.
+- The full diff command (with the base as a literal SHA, never `$BASE`) and the commit list.
 - The untracked files identified in step 1, if any — the sub-agent must read them as part of the change.
 - The list of standards-source files you found in step 3, **plus the smell baseline from step 3** pasted in full — the sub-agent has no other access to it.
 - The brief: "Report — per file/hunk where relevant — (a) every place the diff violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Distinguish hard violations from judgement calls — documented-standard breaches can be hard, but baseline smells are always judgement calls, and a documented repo standard overrides the baseline. Skip anything tooling enforces. Under 400 words."
 
 **Spec sub-agent prompt** — include:
 
-- The diff command and commit list.
+- The diff command (base as a literal SHA) and the commit list.
 - The untracked files identified in step 1, if any.
 - The path or fetched contents of the spec.
 - The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words."

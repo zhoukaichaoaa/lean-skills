@@ -22,7 +22,7 @@
 | `skills/implement/SKILL.md` | mattpocock `engineering/implement` | 0.3.0 重写：内联 tdd/worktree 的一句话护栏（模型调不到手动技能，不再跨层调用）；commit 从无条件改为经用户授权；新增验证步骤与转向 `diagnosing-bugs` 的出口 |
 | `skills/verification-before-completion/SKILL.md` | superpowers `verification-before-completion` | 重写。保留 gate 的实质和证据对照表；按 DOCTRINE 的正向表述与修剪规则改写，删去 Red Flags / Rationalization 两节（大量否定式表述）；556 → 367 词 |
 | `skills/receiving-code-review/SKILL.md` | superpowers `receiving-code-review` | 重写。保留"先核实再实施 / 先澄清全部再动手 / 用技术理由反驳 / YAGNI 检查"；删去 obra 个人语境（"your human partner"）和禁止致谢的段落；894 → 409 词。0.2.0 起由用户调用改为模型调用（`implement` 需要够到它，且触发点在模型盲区），description 换成触发式写法 |
-| `skills/worktree/SKILL.md` | superpowers `using-git-worktrees` | 精简并改名（`using-git-worktrees` → `worktree`）；保留检测顺序、submodule 守卫、原生工具优先、gitignore 校验、基线测试；1064 → 412 词。0.2.0 曾改为模型调用；0.3.0 回到用户调用（`implement` 改为内联护栏后不再需要模型侧可达），并补上分支命名规则（修复 `$BRANCH` 未定义） |
+| `skills/worktree/SKILL.md` | superpowers `using-git-worktrees` | 精简并改名（`using-git-worktrees` → `worktree`）；保留检测顺序、submodule 守卫、原生工具优先、gitignore 校验、基线测试；1064 → 417 词。0.2.0 曾改为模型调用；0.3.0 回到用户调用（`implement` 改为内联护栏后不再需要模型侧可达），补上分支命名规则（修复 `$BRANCH` 未定义），.gitignore 是否提交交还用户决定 |
 | `DOCTRINE.md` | mattpocock `productivity/writing-great-skills` | 翻译为中文并浓缩；术语沿用原文 |
 
 ## 未收录

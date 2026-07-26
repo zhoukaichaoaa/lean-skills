@@ -32,7 +32,7 @@ If they decline, work in place and go to Step 2.
 
 ```bash
 BRANCH=fix-checkout-retry        # the name chosen above
-git check-ignore -q .worktrees || echo ".worktrees/" >> .gitignore   # then commit
+git check-ignore -q .worktrees || echo ".worktrees/" >> .gitignore   # committing this line is the user's call
 git worktree add ".worktrees/$BRANCH" -b "$BRANCH"
 cd ".worktrees/$BRANCH"
 ```
