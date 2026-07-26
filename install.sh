@@ -18,39 +18,55 @@ EOF
 
 mode=install
 assume_yes=0
-case "${1:-}" in
-  -y|--yes)       assume_yes=1 ;;
-  -u|--uninstall) mode=uninstall ;;
-  -h|--help)      usage; exit 0 ;;
-  "")             ;;
-  *)              echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
-esac
+while [ $# -gt 0 ]; do
+  case $1 in
+    -y|--yes)       assume_yes=1 ;;
+    -u|--uninstall) mode=uninstall ;;
+    -h|--help)      usage; exit 0 ;;
+    *)              echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
+  esac
+  shift
+done
 
-# Physical paths (symlinks resolved) so the guard below cannot be fooled.
+# Physical path (symlinks resolved) of the skills we ship.
 src=$(CDPATH= cd -- "$(dirname -- "$0")/skills" 2>/dev/null && pwd -P) || {
   echo "skills/ not found next to this script" >&2; exit 1; }
 
-dest="${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}"
+dest=${CLAUDE_SKILLS_DIR:-}
+if [ -z "$dest" ]; then
+  [ -n "${HOME:-}" ] || { echo "set HOME or CLAUDE_SKILLS_DIR" >&2; exit 1; }
+  dest=$HOME/.claude/skills
+fi
+
 created=0
-if [ "$mode" = uninstall ]; then
-  dest_abs=$(CDPATH= cd -- "$dest" 2>/dev/null && pwd -P) || {
-    echo "nothing installed at $dest"; exit 0; }
+if [ -d "$dest" ]; then
+  dest_abs=$(CDPATH= cd -- "$dest" && pwd -P)
+elif [ "$mode" = uninstall ]; then
+  echo "nothing installed at $dest"; exit 0
 else
-  [ -d "$dest" ] || created=1
+  created=1
   mkdir -p "$dest"
   dest_abs=$(CDPATH= cd -- "$dest" && pwd -P)
 fi
 
-# Refuse to operate on the source itself — a CLAUDE_SKILLS_DIR pointing at this
-# repo's skills/ would otherwise delete the source before copying it. If we just
-# created the target while probing, remove it again: a refused install must not
-# leave a stray directory behind (rmdir -p stops at the first non-empty parent).
-case "$dest_abs/" in
-  "$src"/*)
-    [ "$created" -eq 1 ] && rmdir -p "$dest_abs" 2>/dev/null || true
-    echo "refusing: target $dest_abs is the source (or inside it)" >&2
-    exit 2 ;;
-esac
+# rmdir -p stops at the first non-empty parent, so this only unwinds what we made.
+undo_created() { [ "$created" -eq 1 ] && rmdir -p "$dest_abs" 2>/dev/null || true; }
+refuse() { undo_created; echo "refusing: target $dest_abs is the source (or aliases it)" >&2; exit 2; }
+
+# Guard in two layers. The prefix comparison is free and catches ordinary paths;
+# the probe is filesystem truth — it survives symlinks, junctions, bind mounts,
+# and case-folding, because it asks "does a file I just wrote into the target
+# appear inside the source?" rather than trying to canonicalise names.
+case "$dest_abs/" in "$src"/*) refuse ;; esac
+case "$src/" in "$dest_abs"/*) refuse ;; esac
+
+probe=.lean-skills-probe-$$
+if : > "$dest_abs/$probe" 2>/dev/null; then
+  if [ -e "$src/$probe" ]; then rm -f "$dest_abs/$probe"; refuse; fi
+  rm -f "$dest_abs/$probe"
+else
+  echo "cannot write to target $dest_abs" >&2; exit 1
+fi
 
 if [ "$mode" = uninstall ]; then
   removed=0
@@ -94,8 +110,13 @@ for dir in "$src"/*/; do
     esac
   fi
 
+  # Copy beside the target first, then swap, so an interrupted copy leaves the
+  # previously installed skill intact instead of a half-written one.
+  staging=$dest_abs/.lean-skills-staging-$$
+  rm -rf "$staging"
+  cp -R "${dir%/}" "$staging"
   rm -rf "${dest_abs:?}/$name"
-  cp -R "${dir%/}" "$dest_abs/$name"
+  mv "$staging" "$dest_abs/$name"
   echo "  installed $name"
   installed=$((installed + 1))
 done

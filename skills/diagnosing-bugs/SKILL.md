@@ -48,7 +48,11 @@ The goal is not a clean repro but a **higher reproduction rate**. Loop the trigg
 
 ### When the failure cannot be re-run: the artifact loop
 
-Some real failures never rerun on your machine — a one-off production incident, a crash dump, a third-party outage that has passed. If (and only if) you have exhausted the list above, downgrade from a runnable loop to an **artifact loop**: gather the evidence that exists (logs, traces, core dump, HAR, crash report, DB snapshot) and treat it as the loop. Phase 3 works the same — every hypothesis must predict something **checkable in the artifacts** ("if X is the cause, the log must show Y between T1 and T2") and dies when the artifacts contradict it. Phases 5–6 still apply in full: the fix still gets a regression test at a seam, and the report says plainly it was verified against artifacts, not a live reproduction.
+Some real failures never rerun on your machine — a one-off production incident, a crash dump, a third-party outage that has passed. Only then, downgrade from a runnable loop to an **artifact loop**.
+
+**Entry criterion — same standard of proof as the loop itself.** Write out constructions 1–10 above and, for each, one concrete sentence on why it cannot work for *this* failure. "It's a production incident" exempts nothing on its own: incidents are replayable from captured payloads (5), narrowable by differential runs against the last good deploy (9), and often reproducible under stress (7). If you can't produce ten reasons, you haven't exhausted the list — go back and build the loop.
+
+With that written down: gather the evidence that exists (logs, traces, core dump, HAR, crash report, DB snapshot) and treat it as the loop. Phase 3 works the same — every hypothesis must predict something **checkable in the artifacts** ("if X is the cause, the log must show Y between T1 and T2") and dies when the artifacts contradict it. Phases 5–6 still apply in full: the fix still gets a regression test at a seam, and the report says plainly it was verified against artifacts, not a live reproduction.
 
 No runnable loop **and** no artifacts? Stop and say so explicitly. List what you tried. Ask the user for: (a) access to whatever environment reproduces it, (b) captured artifacts (HAR file, log dump, core dump, screen recording with timestamps), or (c) permission to add temporary production instrumentation. Do **not** hypothesise from nothing.
 
@@ -61,7 +65,7 @@ Phase 1 is done when the loop is **tight** and **red-capable**: you can name **o
 - [ ] **Fast** — seconds, not minutes.
 - [ ] **Agent-runnable** — you can run it unattended.
 
-If you catch yourself reading code to build a theory before this command exists, **stop — jumping straight to a hypothesis is the exact failure this skill prevents.** No red-capable command, no Phase 2. The one exception is the artifact loop below — a real failure that cannot be re-run, investigated against captured evidence instead.
+If you catch yourself reading code to build a theory before this command exists, **stop — jumping straight to a hypothesis is the exact failure this skill prevents.** No red-capable command, no Phase 2. The one exception is the artifact loop above, and only once its entry criterion is met in writing.
 
 ## Phase 2 — Reproduce + minimise
 
@@ -81,7 +85,7 @@ Why bother: a minimal repro shrinks the hypothesis space in Phase 3 (fewer movin
 
 Done when **every remaining element is load-bearing** — removing any one of them makes the loop go green.
 
-Do not proceed until you have reproduced **and** minimised.
+Do not proceed until you have reproduced **and** minimised. On the artifact loop, this phase becomes: catalogue the evidence you hold, state the exact symptom it shows, and name what each artifact can and cannot settle — then proceed.
 
 ## Phase 3 — Hypothesise
 
@@ -133,10 +137,10 @@ Required before declaring done:
 - [ ] Regression test passes (or absence of seam is documented)
 - [ ] All `[DEBUG-...]` instrumentation removed (`grep` the prefix)
 - [ ] Throwaway prototypes deleted (or moved to a clearly-marked debug location)
-- [ ] The hypothesis that turned out correct is stated in the commit / PR message — so the next debugger learns
+- [ ] The hypothesis that turned out correct is stated in the commit / PR message — or, when the work isn't being committed, in the handover report — so the next debugger learns
 
 **Then ask: what would have prevented this bug?** If the answer involves architectural change (no good test seam, tangled callers, hidden coupling), report it to the user with the specifics. Make the recommendation **after** the fix is in, not before — you have more information now than when you started.
 
 ---
 
-_Adapted from [mattpocock/skills](https://github.com/mattpocock/skills) `diagnosing-bugs` (MIT). Changes: added the second-attempt rule (idea from [obra/superpowers](https://github.com/obra/superpowers) `systematic-debugging`), removed dependencies on files outside this collection._
+_Adapted from [mattpocock/skills](https://github.com/mattpocock/skills) `diagnosing-bugs` (MIT). Changes: the second-attempt rule (idea from [obra/superpowers](https://github.com/obra/superpowers) `systematic-debugging`); the artifact loop for failures that cannot be re-run, gated on writing out why each of the ten constructions fails; description narrowed to hard bugs, performance regressions and surviving symptoms; dependencies on files outside this collection removed._

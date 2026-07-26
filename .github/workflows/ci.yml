@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   install:
     strategy:
@@ -15,59 +19,113 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - name: install.sh (fresh, overwrite, guards, uninstall)
+      - name: install.sh
         if: runner.os != 'Windows'
         shell: bash
         run: |
+          set -euo pipefail
           if grep -q $'\r' install.sh; then echo "CRLF found in install.sh"; exit 1; fi
           test -x install.sh
           sh -n install.sh
-          export CLAUDE_SKILLS_DIR="$RUNNER_TEMP/skills"
-          ./install.sh -y
-          test "$(find "$CLAUDE_SKILLS_DIR" -name SKILL.md | wc -l)" -eq 9
-          ./install.sh -y
-          test "$(find "$CLAUDE_SKILLS_DIR" -name SKILL.md | wc -l)" -eq 9
-          # guard: target equal to (or inside) the source must refuse, leaving the source intact
-          if CLAUDE_SKILLS_DIR="$PWD/skills" ./install.sh -y >/dev/null 2>&1; then
-            echo "guard failed: src==dest accepted"; exit 1
-          fi
-          if CLAUDE_SKILLS_DIR="$PWD/skills/tdd" ./install.sh -y >/dev/null 2>&1; then
-            echo "guard failed: dest inside src accepted"; exit 1
-          fi
-          test -f skills/tdd/SKILL.md
-          # spaces in the target path
-          CLAUDE_SKILLS_DIR="$RUNNER_TEMP/skills dir" ./install.sh -y >/dev/null
-          test "$(find "$RUNNER_TEMP/skills dir" -name SKILL.md | wc -l)" -eq 9
-          # uninstall removes exactly ours
-          CLAUDE_SKILLS_DIR="$RUNNER_TEMP/skills dir" ./install.sh --uninstall >/dev/null
-          test "$(find "$RUNNER_TEMP/skills dir" -name SKILL.md | wc -l)" -eq 0
+          command -v dash >/dev/null && dash -n install.sh || true
+          SRC_FILES=$(find skills -type f | wc -l)
 
-      - name: install.ps1 (fresh, overwrite, guards, uninstall)
+          # every installed file, not just SKILL.md — a copy that dropped
+          # tdd/tests.md would otherwise pass
+          install_ok() {
+            test "$(find "$1" -type f | wc -l)" -eq "$SRC_FILES"
+            test "$(find "$1" -name SKILL.md | wc -l)" -eq 9
+          }
+          # a guard must refuse with exit 2, say so, and leave the repo untouched
+          guard_refuses() {
+            set +e; out=$(CLAUDE_SKILLS_DIR="$1" ./install.sh ${2:--y} 2>&1); rc=$?; set -e
+            test "$rc" -eq 2          || { echo "FAIL $1: exit $rc, want 2"; echo "$out"; exit 1; }
+            grep -q 'refusing:' <<<"$out" || { echo "FAIL $1: no refusal message"; exit 1; }
+            test -z "$(git status --porcelain)" || { echo "FAIL $1: repo dirty"; git status --porcelain; exit 1; }
+          }
+
+          export CLAUDE_SKILLS_DIR="$RUNNER_TEMP/skills"
+          ./install.sh -y && install_ok "$CLAUDE_SKILLS_DIR"
+          ./install.sh -y && install_ok "$CLAUDE_SKILLS_DIR"
+
+          guard_refuses "$PWD/skills"            # target is the source
+          guard_refuses "$PWD/skills/tdd"        # target inside the source
+          guard_refuses "$PWD"                   # source inside the target
+          guard_refuses "$PWD/skills/a/b/c"      # nested + non-existent (exercises the undo path)
+          ln -s "$PWD/skills" "$RUNNER_TEMP/link-src"
+          guard_refuses "$RUNNER_TEMP/link-src"  # symlink to the source
+          ln -s "$RUNNER_TEMP/link-src" "$RUNNER_TEMP/link-chain"
+          guard_refuses "$RUNNER_TEMP/link-chain"        # chained symlink
+          guard_refuses "$RUNNER_TEMP/link-src/nested"   # parent component is a symlink
+          guard_refuses "$PWD/skills" --uninstall        # the delete-only path is guarded too
+
+          T="$RUNNER_TEMP/skills dir"            # spaces in the path
+          CLAUDE_SKILLS_DIR="$T" ./install.sh -y >/dev/null && install_ok "$T"
+          mkdir -p "$T/not-ours" && : > "$T/not-ours/SKILL.md"
+          CLAUDE_SKILLS_DIR="$T" ./install.sh --uninstall >/dev/null
+          test -f "$T/not-ours/SKILL.md"                       # a foreign skill survives
+          test "$(find "$T" -name SKILL.md | wc -l)" -eq 1      # ours are gone
+          test -z "$(git status --porcelain)"
+
+      - name: install.ps1
         if: runner.os == 'Windows'
         shell: powershell
         run: |
+          $ErrorActionPreference = 'Stop'
           Set-ExecutionPolicy -Scope Process Bypass -Force
+          $srcFiles = (Get-ChildItem -Recurse -File skills).Count
+          function Assert-Install($p) {
+            $f = (Get-ChildItem -Recurse -File -LiteralPath $p).Count
+            $s = (Get-ChildItem -Recurse -Filter SKILL.md -LiteralPath $p).Count
+            if ($f -ne $srcFiles) { throw "expected $srcFiles files, got $f" }
+            if ($s -ne 9) { throw "expected 9 SKILL.md, got $s" }
+          }
+          function Assert-Refused($p, $op) {
+            $threw = $false
+            $env:CLAUDE_SKILLS_DIR = $p
+            try { if ($op -eq 'Uninstall') { & .\install.ps1 -Uninstall | Out-Null } else { & .\install.ps1 -Yes | Out-Null } }
+            catch { $threw = $true; if ($_.Exception.Message -notmatch 'refusing:') { throw "wrong error for ${p}: $_" } }
+            if (-not $threw) { throw "guard did not refuse: $p ($op)" }
+            $dirty = git status --porcelain
+            if ($dirty) { throw "repo dirty after ${p}: $dirty" }
+          }
+
           $env:CLAUDE_SKILLS_DIR = Join-Path $env:RUNNER_TEMP 'skills'
-          .\install.ps1 -Yes
-          $n = (Get-ChildItem -Recurse -Filter SKILL.md -LiteralPath $env:CLAUDE_SKILLS_DIR).Count
-          if ($n -ne 9) { throw "expected 9 SKILL.md, got $n" }
-          .\install.ps1 -Yes
-          $n = (Get-ChildItem -Recurse -Filter SKILL.md -LiteralPath $env:CLAUDE_SKILLS_DIR).Count
-          if ($n -ne 9) { throw "expected 9 SKILL.md after overwrite, got $n" }
-          # guard: target equal to the source must refuse, leaving the source intact
-          $failed = $false
-          $env:CLAUDE_SKILLS_DIR = Join-Path $PWD 'skills'
-          try { .\install.ps1 -Yes | Out-Null } catch { $failed = $true }
-          if (-not $failed) { throw "guard failed: src==dest accepted" }
-          if (-not (Test-Path skills\tdd\SKILL.md)) { throw "source damaged" }
-          # uninstall removes exactly ours
-          $env:CLAUDE_SKILLS_DIR = Join-Path $env:RUNNER_TEMP 'skills'
-          .\install.ps1 -Uninstall
-          $n = (Get-ChildItem -Recurse -Filter SKILL.md -LiteralPath $env:CLAUDE_SKILLS_DIR -ErrorAction SilentlyContinue).Count
-          if ($n -ne 0) { throw "uninstall left $n SKILL.md behind" }
+          .\install.ps1 -Yes | Out-Null; Assert-Install $env:CLAUDE_SKILLS_DIR
+          .\install.ps1 -Yes | Out-Null; Assert-Install $env:CLAUDE_SKILLS_DIR
+
+          $repo = (Get-Location).Path
+          Assert-Refused (Join-Path $repo 'skills') 'Yes'
+          Assert-Refused (Join-Path $repo 'skills\tdd') 'Yes'
+          Assert-Refused $repo 'Yes'
+          Assert-Refused (Join-Path $repo 'skills\a\b\c') 'Yes'
+          # junction topologies: direct, chained, and a link on a parent component.
+          # GetFullPath does not resolve reparse points, so only the write-probe catches these.
+          cmd /c mklink /J "$env:RUNNER_TEMP\jroot" "$repo" | Out-Null
+          cmd /c mklink /J "$env:RUNNER_TEMP\j1" "$repo\skills" | Out-Null
+          cmd /c mklink /J "$env:RUNNER_TEMP\j2" "$env:RUNNER_TEMP\j1" | Out-Null
+          foreach ($op in @('Yes','Uninstall')) {
+            Assert-Refused "$env:RUNNER_TEMP\jroot\skills" $op
+            Assert-Refused "$env:RUNNER_TEMP\j1" $op
+            Assert-Refused "$env:RUNNER_TEMP\j2" $op
+          }
+          Assert-Refused "$env:RUNNER_TEMP\j1\sub" 'Yes'
+
+          $T = Join-Path $env:RUNNER_TEMP 'skills dir'
+          $env:CLAUDE_SKILLS_DIR = $T
+          .\install.ps1 -Yes | Out-Null; Assert-Install $T
+          New-Item -ItemType Directory -Force -Path (Join-Path $T 'not-ours') | Out-Null
+          New-Item -ItemType File -Force -Path (Join-Path $T 'not-ours\SKILL.md') | Out-Null
+          .\install.ps1 -Uninstall | Out-Null
+          if (-not (Test-Path -LiteralPath (Join-Path $T 'not-ours\SKILL.md'))) { throw "uninstall removed a foreign skill" }
+          $left = (Get-ChildItem -Recurse -Filter SKILL.md -LiteralPath $T).Count
+          if ($left -ne 1) { throw "uninstall left $left SKILL.md, want 1 (the foreign one)" }
+          $dirty = git status --porcelain
+          if ($dirty) { throw "repo dirty at end: $dirty" }
 
       - name: manifests and frontmatter
         if: runner.os == 'Linux'
@@ -79,6 +137,7 @@ jobs:
               json.load(io.open(p, encoding='utf-8'))
           resident, manual = [], []
           for d in sorted(os.listdir('skills')):
+              assert os.path.isdir(f'skills/{d}'), f'stray file in skills/: {d}'
               text = io.open(f'skills/{d}/SKILL.md', encoding='utf-8').read()
               m = re.match(r'^---\n(.*?)\n---\n', text, re.S)
               assert m, f'{d}: no frontmatter'
@@ -89,18 +148,38 @@ jobs:
               (manual if re.search(r'^disable-model-invocation:\s*true', fm, re.M)
                       else resident).append(d)
           assert len(resident) == 4 and len(manual) == 5, (resident, manual)
-          print('ok: 9 skills,', len(resident), 'resident,', len(manual), 'manual')
+          # the installers and the plugin blurb restate these lists; keep them honest
+          for path in ('install.sh', 'install.ps1'):
+              blob = io.open(path, encoding='utf-8').read()
+              tail = blob[blob.index('Resident (model-invoked)'):]
+              for s in resident:
+                  assert s in tail, f'{path}: {s} missing from the resident line'
+              for s in manual:
+                  assert s in tail, f'{path}: {s} missing from the manual line'
+          plugin = json.load(io.open('.claude-plugin/plugin.json', encoding='utf-8'))
+          assert f'{len(resident)} resident' in plugin['description'], plugin['description']
+          print('ok: 9 skills,', len(resident), 'resident,', len(manual), 'manual; installer lists agree')
           EOF
 
-      - name: diff recipe captures every change class
+      - name: code-review's diff recipe captures every change class
         if: runner.os == 'Linux'
         shell: bash
         run: |
+          set -euo pipefail
+          # Anchor on the skill text: if the recipe in SKILL.md changes, this test
+          # must be revisited rather than silently keep testing a stale command.
+          S=skills/code-review/SKILL.md
+          grep -q 'BASE_SHA=$(git merge-base <fixed-point> HEAD)' "$S"
+          grep -q 'git diff <BASE_SHA>' "$S"
+          grep -q 'git log <BASE_SHA>..HEAD --oneline' "$S"
+          grep -q 'git status --porcelain' "$S"
+          grep -q 'literal SHA' "$S"
+
           R="$RUNNER_TEMP/fixture"; rm -rf "$R"; git init -q "$R"; cd "$R"
           git config user.email ci@ci; git config user.name ci
           printf 'base\n' > kept.txt; printf 'gone\n' > gone.txt; printf 'old\n' > old-name.txt
           git add -A; git commit -qm base
-          BASE_SHA=$(git rev-parse HEAD)
+          BASE_SHA=$(git merge-base HEAD HEAD)
           printf 'committed-change\n' >> kept.txt; git commit -aqm feature
           printf 'staged-content\n' > staged.txt; git add staged.txt
           printf 'unstaged-change\n' >> kept.txt
@@ -109,19 +188,31 @@ jobs:
           git mv old-name.txt new-name.txt
           PATCH=$(git diff "$BASE_SHA")
           STATUS=$(git status --porcelain)
-          echo "$PATCH"  | grep -q 'committed-change'   # committed edits visible
-          echo "$PATCH"  | grep -q 'staged-content'     # staged file visible
-          echo "$PATCH"  | grep -q 'unstaged-change'    # unstaged edits visible
-          echo "$PATCH"  | grep -q 'gone.txt'           # deletion visible
-          echo "$PATCH"  | grep -q 'new-name.txt'       # rename visible (as delete+add)
-          echo "$STATUS" | grep -q 'un tracked.txt'     # untracked via the status channel
+          echo "$PATCH"  | grep -q 'committed-change'
+          echo "$PATCH"  | grep -q 'staged-content'
+          echo "$PATCH"  | grep -q 'unstaged-change'
+          echo "$PATCH"  | grep -q 'gone.txt'
+          echo "$PATCH"  | grep -q 'new-name.txt'
+          echo "$STATUS" | grep -q 'un tracked.txt'
+          # The skill warns that an empty base silently degrades `git diff <BASE_SHA>`
+          # into an unstaged-only diff. Prove it on a file that is *only* staged —
+          # unlike a modified file, it cannot leak in as diff context.
+          if git diff ${UNSET_ON_PURPOSE:-} --name-only | grep -qx 'staged.txt'; then
+            echo "empty-base diff should NOT see staged files"; exit 1
+          fi
+          git diff "$BASE_SHA" --name-only | grep -qx 'staged.txt'   # but the real base does
+          # and that a bad fixed point fails loudly rather than silently
           git merge-base "$BASE_SHA" HEAD >/dev/null
-          echo "diff recipe: all change classes visible"
+          if git merge-base HEAD 0000000000000000000000000000000000000000 >/dev/null 2>&1; then
+            echo "expected merge-base against a bogus ref to fail"; exit 1
+          fi
+          echo "diff recipe: all change classes visible; degradation modes confirmed"
 
       - name: official plugin validation (strict)
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          npm install -g @anthropic-ai/claude-code >/dev/null 2>&1
+          set -euo pipefail
+          npm install -g @anthropic-ai/claude-code@2.1.220
           claude plugin validate --strict .claude-plugin/plugin.json
           claude plugin validate --strict .claude-plugin/marketplace.json

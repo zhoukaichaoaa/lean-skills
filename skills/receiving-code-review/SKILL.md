@@ -13,8 +13,7 @@ Review feedback is a set of claims about the code. Each one is either true of th
 2. **Restate each item** in your own words. An item you can't restate is an item you don't understand yet.
 3. **Clarify every unclear item first** — before implementing the clear ones. Items interact; implementing 1, 2, 3 while 4 and 5 are still fuzzy usually means redoing 1, 2, 3.
 4. **Check each claim against the codebase.** Does the suggestion hold on this stack, this version, these callers? Is there a reason the current code is the way it is?
-5. **Respond with the technical content** — the fix you made, the question you have, or the reasoning for disagreeing.
-6. **Implement one item at a time**, testing each: blocking issues first (breakage, security), then simple fixes, then the complex ones.
+5. **Work one item at a time** — act, then report that item: blocking issues first (breakage, security), then simple fixes, then the complex ones. Each item ends in one of three states: fixed and tested, disagreed with reasons, or waiting on your question.
 
 ## Responding
 

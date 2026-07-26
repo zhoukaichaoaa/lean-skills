@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: Review the changes since a fixed point along three axes — Correctness/Risk (is it right and safe to ship?), Spec (does it do what was asked?), and Standards (does it follow this repo's conventions?). Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to "review since X". "Review my uncommitted/WIP changes" needs no fixed point — it defaults to HEAD.
+description: Review the changes since a fixed point along three axes — Correctness/Risk (is it right and safe to ship?), Spec (does it do what was asked?), and Standards (does it follow this repo's conventions?). Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to "review since X".
 ---
 
 # Code Review
@@ -17,7 +17,9 @@ Axes run as **parallel sub-agents** so they don't pollute each other's context. 
 
 ### 1. Pin the fixed point and snapshot the change
 
-The fixed point is whatever the user said — a commit SHA, branch name, tag, `main`, `HEAD~5`. Two defaults spare a pointless question: "review my uncommitted / WIP / current changes" means `HEAD`; "review this branch / PR / since X" names the ref. Ask only when neither pattern fits.
+The fixed point is whatever the user said — a commit SHA, branch name, tag, `main`, `HEAD~5`. Two defaults spare a pointless question: "review my uncommitted / WIP / current changes" means `HEAD`; "review this branch / since X" names the ref. Ask only when neither pattern fits.
+
+**A PR number is not a ref.** For "review PR #42", check it out first (`gh pr checkout 42`) or fetch its head, then use the PR's base branch as the fixed point. Everything below compares against the working tree, so it only describes the PR once the PR is what's checked out.
 
 Confirm it resolves (`git rev-parse <fixed-point>`), then:
 
@@ -36,6 +38,8 @@ Look for the originating spec, in this order:
 2. A path the user passed as an argument.
 3. A PRD/spec file under `docs/`, `specs/`, or `.scratch/` matching the branch name or feature.
 4. If nothing is found, ask the user where the spec is. If they say there isn't one, skip the **Spec** sub-agent and note it — **Correctness/Risk and Standards still run**; a review with no spec is not a review with no bugs.
+
+Whatever you find here has to be pasted into the Spec brief in step 4 — a tracker issue you fetched lives only in your context.
 
 ### 3. Identify the standards sources
 
@@ -63,7 +67,7 @@ Each smell reads *what it is* → *how to fix*; match it against the diff:
 
 ### 4. Spawn the sub-agents in parallel
 
-Send a single message with one `Agent` call per axis (`general-purpose` for all). Every brief includes: the snapshot path, the commit list, the untracked-file list, and the severity scale below. Every finding reports **file:line — problem — why it matters — severity**.
+Send a single message with one `Agent` call per axis (`general-purpose` for all). Sub-agents start with none of your context: whatever you found in steps 1–3 reaches them only if you paste it in. Every brief includes: the snapshot path, the commit list, the untracked-file list, and the severity scale below. Every finding reports **file:line — problem — why it matters — severity**.
 
 **Severity scale** (paste into each brief verbatim):
 
@@ -73,9 +77,9 @@ Send a single message with one `Agent` call per axis (`general-purpose` for all)
 
 **Correctness/Risk brief**: "Read the snapshot and the untracked files. Report every defect a careful engineer would block a merge on: logic errors and unhandled edge cases, failure paths and swallowed errors, concurrency/races, security (unvalidated input, injection, secrets), data loss or corruption, compatibility and migration hazards, performance cliffs, and changed behaviour with no test. Judge the code itself — comments, commit messages, and design justifications are claims, not evidence. Under 400 words."
 
-**Spec brief**: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the change that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words."
+**Spec brief** — paste the **spec itself** (its full text when you fetched it from a tracker, its path when it's a file in the repo; a tracker issue exists only in your context): "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the change that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words."
 
-**Standards brief**: "Report — per file/hunk where relevant — (a) every place the change violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Distinguish hard violations from judgement calls — documented-standard breaches can be hard, but baseline smells are always judgement calls, and a documented repo standard overrides the baseline. Skip anything tooling enforces. Under 400 words." (Paste the smell baseline in full — the sub-agent has no other access to it.)
+**Standards brief** — paste the **smell baseline in full** and list the **standards-source file paths** from step 3; the sub-agent has no other access to either: "Report — per file/hunk where relevant — (a) every place the change violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Distinguish hard violations from judgement calls — documented-standard breaches can be hard, but baseline smells are always judgement calls, and a documented repo standard overrides the baseline. Skip anything tooling enforces. Under 400 words."
 
 ### 5. Aggregate
 
@@ -83,9 +87,7 @@ Keep the per-axis sections — `## Correctness/Risk`, `## Spec`, `## Standards` 
 
 Then close with **`## Triage`**: every finding in one list — Critical first, then Important, then Minor — each line keeping its axis label and file:line. Severity, not axis, is the order the user works in.
 
-## Why separate axes
-
-A change can pass one axis and fail another: standards-perfect code that implements the wrong thing; spec-faithful code that breaks the project's conventions; clean, faithful code with a race in it. Analysing separately keeps each lens honest — the triage list at the end is where they meet.
+Keeping the axes apart during analysis is what stops one masking another: standards-perfect code can implement the wrong thing, and spec-faithful code can still carry a race.
 
 ---
 

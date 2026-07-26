@@ -1,6 +1,6 @@
 ---
 name: worktree
-description: "Isolated git worktree setup: detect existing isolation, prefer the platform's native tool, verify gitignore, green baseline before work."
+description: "Isolated git worktree setup: detect existing isolation, prefer the platform's native tool, confirm the directory is ignored, run the baseline suite before work."
 disable-model-invocation: true
 ---
 
@@ -16,7 +16,7 @@ GIT_COMMON=$(cd "$(git rev-parse --git-common-dir)" 2>/dev/null && pwd -P)
 git rev-parse --show-superproject-working-tree 2>/dev/null   # non-empty ⇒ submodule
 ```
 
-`GIT_DIR != GIT_COMMON` **and not a submodule** ⇒ you are already in a linked worktree. Report the path and branch, then go to Step 2. A submodule looks the same on the first check and is not a worktree — that's what the second command settles.
+`GIT_DIR != GIT_COMMON` **and not a submodule** ⇒ you are already in a linked worktree. Report the path and branch, then go to Step 2. The submodule check also tells Step 1 which exclude file to write: submodules keep `.git` as a file, so the literal `.git/info/exclude` path does not exist there.
 
 Otherwise you're in a normal checkout. Unless the user has already stated a preference, ask before creating anything:
 
@@ -26,24 +26,29 @@ If they decline, work in place and go to Step 2.
 
 ## Step 1 — Create it
 
-**Native tool first.** If the harness offers one (`EnterWorktree`, `WorktreeCreate`, a `/worktree` command, a `--worktree` flag), use it and skip to Step 2. It owns placement, branching, and cleanup; `git worktree add` alongside it creates state the harness cannot see or clean up.
+**Native tool first.** If the harness offers one (`EnterWorktree`, `WorktreeCreate`, a `--worktree` flag), use it and skip to Step 2. It owns placement, branching, and cleanup; `git worktree add` alongside it creates state the harness cannot see or clean up.
 
 **Git fallback**, only when no native tool exists. First pick the branch name — after the ticket or feature (`fix-checkout-retry`); if nothing suggests one, ask:
 
 ```bash
 BRANCH=fix-checkout-retry        # the name chosen above
-git check-ignore -q .worktrees || echo ".worktrees/" >> .git/info/exclude   # repo-local ignore, touches no tracked file
+echo ".worktrees/" >> "$(git rev-parse --git-common-dir)/info/exclude"
+git check-ignore -q .worktrees || { echo "still not ignored — stop here"; }
 git worktree add ".worktrees/$BRANCH" -b "$BRANCH"
 cd ".worktrees/$BRANCH"
 ```
 
-Directory choice, in priority order: an explicit user preference, then an existing `.worktrees/` or `worktrees/` (`.worktrees` wins if both), then `.worktrees/` as the default. Verify it is ignored before creating anything inside it — an unignored worktree directory commits the entire tree into the repo. Prefer `.git/info/exclude` over editing `.gitignore`: same effect, no tracked-file change, no commit question. Offer a `.gitignore` entry only if the user wants the ignore shared with the team.
+Directory choice, in priority order: an explicit user preference, then an existing `.worktrees/` or `worktrees/` (`.worktrees` wins if both), then `.worktrees/` as the default.
+
+Prefer the repo-local exclude file over editing `.gitignore`: same effect, no tracked-file change, no commit question. Reach it through `git rev-parse --git-common-dir`, never the literal path `.git/info/exclude` — inside a submodule `.git` is a *file*, and from a subdirectory it isn't there at all, so the literal path silently fails. **Confirm with `git check-ignore` before creating the worktree**: an unignored worktree directory puts the whole tree on track to be committed into the repo. Offer a `.gitignore` entry only if the user wants the ignore shared with the team.
 
 If the branch or the worktree path already exists, reuse it when it is yours and clean; otherwise pick a new name — `git worktree add` refuses duplicates. If it fails on a permission error, say the sandbox blocked it and continue in the current directory.
 
 ## Step 2 — Setup and baseline
 
-Install dependencies **the way the repo does**, detected from its lockfile: `pnpm-lock.yaml` → pnpm, `yarn.lock` → yarn, `bun.lockb` → bun, `package-lock.json` → npm; `uv.lock` → uv, `poetry.lock` → poetry, `pdm.lock` → pdm, `requirements*.txt` → pip; `Cargo.toml` → cargo, `go.mod` → go. A `packageManager` field in `package.json` outranks lockfile guesses. No lockfile and no documented setup? Say what you found and ask instead of guess-installing. Then run the test suite once.
+Install dependencies **the way the repo does**. Node: a `packageManager` field in `package.json` decides it; otherwise the lockfile — `pnpm-lock.yaml` → pnpm, `yarn.lock` → yarn, `bun.lockb` → bun, `package-lock.json` → npm. Python: `uv.lock` → uv, `poetry.lock` → poetry, `pdm.lock` → pdm, `requirements*.txt` → pip. Rust `Cargo.toml` → cargo, Go `go.mod` → go. Nothing decisive and no documented setup? Say what you found and ask instead of guess-installing.
+
+Then run the test suite once and **report the result as it is**. A green baseline is what makes later failures attributable to your change; a red one is information the user needs before you start, and whether to proceed is their call.
 
 A green baseline is what makes every later failure attributable to your change. If the baseline is red, report the failures and let the user decide whether to proceed.
 
@@ -53,4 +58,4 @@ Report the workspace path, the branch, and the baseline test result as actual co
 
 ---
 
-_Condensed from [obra/superpowers](https://github.com/obra/superpowers) `using-git-worktrees` (MIT)._
+_Condensed from [obra/superpowers](https://github.com/obra/superpowers) `using-git-worktrees` (MIT); branch naming, repo-local exclude via `--git-common-dir`, and lockfile-driven package-manager detection added._

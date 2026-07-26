@@ -18,44 +18,59 @@ param([switch]$Yes, [switch]$Uninstall)
 
 $ErrorActionPreference = 'Stop'
 
-function Resolve-Physical([string]$Path) {
-  # Full path with one level of junction/symlink resolution, so a linked
-  # target cannot slip past the source/target guard below.
-  $full = [IO.Path]::GetFullPath($Path)
-  try {
-    $item = Get-Item -LiteralPath $full -ErrorAction Stop
-    if ($item.LinkType -and $item.Target) { $full = [IO.Path]::GetFullPath(@($item.Target)[0]) }
-  } catch {}
-  return $full.TrimEnd('\')
-}
-
 $src = Join-Path $PSScriptRoot 'skills'
 if (-not (Test-Path -LiteralPath $src)) { throw "skills/ not found next to this script" }
-$srcAbs = Resolve-Physical $src
+$srcAbs = ([IO.Path]::GetFullPath($src)).TrimEnd('\')
+
+# Snapshot the source list before touching the target: if anything ever lands
+# inside the source, it must not be picked up as a tenth skill and copied into itself.
+$srcDirs = @(Get-ChildItem -Directory -LiteralPath $srcAbs)
 
 $dest = if ($env:CLAUDE_SKILLS_DIR) { $env:CLAUDE_SKILLS_DIR } else { Join-Path $HOME '.claude\skills' }
 
-$created = $false
-if ($Uninstall) {
-  if (-not (Test-Path -LiteralPath $dest)) { Write-Host "nothing installed at $dest"; exit 0 }
-} elseif (-not (Test-Path -LiteralPath $dest)) {
-  New-Item -ItemType Directory -Force -Path $dest | Out-Null
-  $created = $true
+# Track the directories we create, deepest first, so a refused run unwinds exactly
+# what it made and never touches a directory that already held something.
+$createdLevels = @()
+if (-not (Test-Path -LiteralPath $dest)) {
+  if ($Uninstall) { Write-Host "nothing installed at $dest"; exit 0 }
+  $probeUp = ([IO.Path]::GetFullPath($dest)).TrimEnd('\')
+  while ($probeUp -and -not (Test-Path -LiteralPath $probeUp)) {
+    $createdLevels += $probeUp
+    $probeUp = [IO.Path]::GetDirectoryName($probeUp)
+  }
+  New-Item -ItemType Directory -Force -LiteralPath $dest | Out-Null
 }
-$destAbs = Resolve-Physical $dest
+$destAbs = ([IO.Path]::GetFullPath($dest)).TrimEnd('\')
 
-# Refuse to operate on the source itself — a CLAUDE_SKILLS_DIR pointing at this
-# repo's skills/ would otherwise delete the source before copying it. If we just
-# created the target while probing, remove it again so a refused install leaves
-# nothing behind (no -Recurse: a non-empty directory is never touched).
-if (($destAbs + '\').StartsWith($srcAbs + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
-  if ($created) { Remove-Item -LiteralPath $destAbs -Force -ErrorAction SilentlyContinue }
-  throw "refusing: target $destAbs is the source (or inside it)"
+function Undo-Created {
+  foreach ($lvl in $createdLevels) {
+    if (Test-Path -LiteralPath $lvl) {
+      if (-not (Get-ChildItem -Force -LiteralPath $lvl)) {
+        Remove-Item -Force -LiteralPath $lvl -ErrorAction SilentlyContinue
+      }
+    }
+  }
 }
+function Deny-Target { Undo-Created; throw "refusing: target $destAbs is the source (or aliases it)" }
+
+# Guard in two layers. The prefix comparison is free and catches ordinary paths;
+# the probe is filesystem truth — it survives junctions, symlinks (including
+# chained ones and links on parent components), and case-folding, because it asks
+# "does a file I just wrote into the target appear inside the source?" instead of
+# trying to canonicalise names. GetFullPath resolves 8.3 names but no reparse points.
+if (($destAbs + '\').StartsWith($srcAbs + '\', [StringComparison]::OrdinalIgnoreCase)) { Deny-Target }
+if (($srcAbs + '\').StartsWith($destAbs + '\', [StringComparison]::OrdinalIgnoreCase)) { Deny-Target }
+
+$probe = ".lean-skills-probe-$PID"
+try { New-Item -ItemType File -Force -LiteralPath (Join-Path $destAbs $probe) | Out-Null }
+catch { Undo-Created; throw "cannot write to target $destAbs" }
+$aliased = Test-Path -LiteralPath (Join-Path $srcAbs $probe)
+Remove-Item -Force -LiteralPath (Join-Path $destAbs $probe) -ErrorAction SilentlyContinue
+if ($aliased) { Deny-Target }
 
 if ($Uninstall) {
   $removed = 0
-  foreach ($dir in Get-ChildItem -Directory -LiteralPath $srcAbs) {
+  foreach ($dir in $srcDirs) {
     $target = Join-Path $destAbs $dir.Name
     if (Test-Path -LiteralPath $target) {
       Remove-Item -Recurse -Force -LiteralPath $target
@@ -71,7 +86,7 @@ if ($Uninstall) {
 $installed = 0
 $kept = 0
 
-foreach ($dir in Get-ChildItem -Directory -LiteralPath $srcAbs) {
+foreach ($dir in $srcDirs) {
   $target = Join-Path $destAbs $dir.Name
   if (Test-Path -LiteralPath $target) {
     if (-not $Yes) {
@@ -83,9 +98,14 @@ foreach ($dir in Get-ChildItem -Directory -LiteralPath $srcAbs) {
         continue
       }
     }
-    Remove-Item -Recurse -Force -LiteralPath $target
   }
-  Copy-Item -Recurse -LiteralPath $dir.FullName -Destination $target
+  # Copy beside the target first, then swap, so an interrupted copy leaves the
+  # previously installed skill intact instead of a half-written one.
+  $staging = Join-Path $destAbs ".lean-skills-staging-$PID"
+  if (Test-Path -LiteralPath $staging) { Remove-Item -Recurse -Force -LiteralPath $staging }
+  Copy-Item -Recurse -LiteralPath $dir.FullName -Destination $staging
+  if (Test-Path -LiteralPath $target) { Remove-Item -Recurse -Force -LiteralPath $target }
+  Move-Item -LiteralPath $staging -Destination $target
   Write-Host "  installed $($dir.Name)"
   $installed++
 }
