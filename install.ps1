@@ -38,7 +38,9 @@ if (-not (Test-Path -LiteralPath $dest)) {
     $createdLevels += $probeUp
     $probeUp = [IO.Path]::GetDirectoryName($probeUp)
   }
-  New-Item -ItemType Directory -Force -LiteralPath $dest | Out-Null
+  # .NET rather than New-Item: Windows PowerShell 5.1's New-Item has no
+  # -LiteralPath, and -Path would treat [ ] in a path as a wildcard.
+  [IO.Directory]::CreateDirectory($dest) | Out-Null
 }
 $destAbs = ([IO.Path]::GetFullPath($dest)).TrimEnd('\')
 
@@ -61,12 +63,31 @@ function Deny-Target { Undo-Created; throw "refusing: target $destAbs is the sou
 if (($destAbs + '\').StartsWith($srcAbs + '\', [StringComparison]::OrdinalIgnoreCase)) { Deny-Target }
 if (($srcAbs + '\').StartsWith($destAbs + '\', [StringComparison]::OrdinalIgnoreCase)) { Deny-Target }
 
-$probe = ".lean-skills-probe-$PID"
-try { New-Item -ItemType File -Force -LiteralPath (Join-Path $destAbs $probe) | Out-Null }
-catch { Undo-Created; throw "cannot write to target $destAbs" }
-$aliased = Test-Path -LiteralPath (Join-Path $srcAbs $probe)
-Remove-Item -Force -LiteralPath (Join-Path $destAbs $probe) -ErrorAction SilentlyContinue
+$canary = ".lean-skills-canary-$PID"
+$canaryPath = Join-Path $srcAbs $canary
+$aliased = $false
+try {
+  [IO.File]::WriteAllText($canaryPath, '')
+  # Walk up from the target and ask the filesystem, at each level, whether the
+  # source's canary is visible there. Reads traverse junctions and symlinks, so
+  # this catches a link that lands on the source itself *and* one that lands
+  # somewhere beneath it — which a marker written into the target cannot.
+  $up = $destAbs
+  for ($i = 0; $i -lt 64 -and $up; $i++) {
+    if (Test-Path -LiteralPath (Join-Path $up $canary)) { $aliased = $true; break }
+    $up = [IO.Path]::GetDirectoryName($up)
+  }
+} finally {
+  Remove-Item -Force -LiteralPath $canaryPath -ErrorAction SilentlyContinue
+}
 if ($aliased) { Deny-Target }
+
+# Separately confirm the target is writable, so a permission problem surfaces
+# here rather than halfway through the copy.
+$probePath = Join-Path $destAbs ".lean-skills-probe-$PID"
+try { [IO.File]::WriteAllText($probePath, '') }
+catch { Undo-Created; throw "cannot write to target $destAbs" }
+Remove-Item -Force -LiteralPath $probePath -ErrorAction SilentlyContinue
 
 if ($Uninstall) {
   $removed = 0

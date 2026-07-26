@@ -60,7 +60,8 @@ jobs:
           guard_refuses "$RUNNER_TEMP/link-src"  # symlink to the source
           ln -s "$RUNNER_TEMP/link-src" "$RUNNER_TEMP/link-chain"
           guard_refuses "$RUNNER_TEMP/link-chain"        # chained symlink
-          guard_refuses "$RUNNER_TEMP/link-src/nested"   # parent component is a symlink
+          guard_refuses "$RUNNER_TEMP/link-src/nested"     # parent component is a symlink
+          guard_refuses "$RUNNER_TEMP/link-src/x/y"        # ...two levels down
           guard_refuses "$PWD/skills" --uninstall        # the delete-only path is guarded too
 
           T="$RUNNER_TEMP/skills dir"            # spaces in the path
@@ -113,13 +114,16 @@ jobs:
             Assert-Refused "$env:RUNNER_TEMP\j1" $op
             Assert-Refused "$env:RUNNER_TEMP\j2" $op
           }
+          # a link on a *parent* component: the target lands inside the source,
+          # which a marker written into the target cannot detect
           Assert-Refused "$env:RUNNER_TEMP\j1\sub" 'Yes'
+          Assert-Refused "$env:RUNNER_TEMP\j1\x\y" 'Yes'
 
           $T = Join-Path $env:RUNNER_TEMP 'skills dir'
           $env:CLAUDE_SKILLS_DIR = $T
           .\install.ps1 -Yes | Out-Null; Assert-Install $T
-          New-Item -ItemType Directory -Force -Path (Join-Path $T 'not-ours') | Out-Null
-          New-Item -ItemType File -Force -Path (Join-Path $T 'not-ours\SKILL.md') | Out-Null
+          [IO.Directory]::CreateDirectory((Join-Path $T 'not-ours')) | Out-Null
+          [IO.File]::WriteAllText((Join-Path $T 'not-ours\SKILL.md'), '')
           .\install.ps1 -Uninstall | Out-Null
           if (-not (Test-Path -LiteralPath (Join-Path $T 'not-ours\SKILL.md'))) { throw "uninstall removed a foreign skill" }
           $left = (Get-ChildItem -Recurse -Filter SKILL.md -LiteralPath $T).Count

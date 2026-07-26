@@ -6,7 +6,16 @@
 
 **Critical — 数据丢失，已复现后修复**
 
-- 安装器守卫在 Windows 上可被链接绕过。`GetFullPath` 归一化 8.3 短名却不解析 reparse point，而路径解析只处理最末一级、只解一层。用指向仓库的 junction 作 `CLAUDE_SKILLS_DIR`，`-Uninstall` 会**静默删光仓库 `skills/` 下全部 11 个文件并报告成功**（已在克隆上复现）。改用两层守卫：前缀比较（免费、双向）+ **写探针**——往目标写一个标记文件，看它是否出现在源目录内。探针是文件系统事实，对 junction、符号链接、链式链接、父组件是链接、大小写折叠一概免疫。8 个 junction 向量复验全部拒绝、源完好、零残留。
+- 安装器守卫在 Windows 上可被链接绕过。`GetFullPath` 归一化 8.3 短名却不解析 reparse point，而路径解析只处理最末一级、只解一层。用指向仓库的 junction 作 `CLAUDE_SKILLS_DIR`，`-Uninstall` 会**静默删光仓库 `skills/` 下全部 11 个文件并报告成功**（已在克隆上复现）。
+
+改用两层守卫：前缀比较（免费、双向）+ **canary 上溯**——把标记文件写进**源目录**，再从目标逐级向上，问文件系统每一层能否看到它。读操作会穿透 junction 与符号链接，所以这既能识别"目标就是源"，也能识别"目标落在源内部"。
+
+修复过程本身出过两次错，都由更严格的验证抓出：
+
+1. Windows PowerShell 5.1 的 `New-Item` **没有 `-LiteralPath`**，第一版修复在探针那行直接抛异常。我本地的 junction 矩阵因此**假通过**——测试只检查"是否抛异常"，而异常来自崩溃不是守卫。CI 的 Windows 腿把它挡了下来。改用 `[IO.File]::WriteAllText` / `[IO.Directory]::CreateDirectory`（天然字面，且不把路径里的 `[ ]` 当通配符）。
+2. 断言改严（必须匹配 `refusing:` 才算拦截）之后，暴露出**探针方向本身是错的**：当 junction 在**父组件**上（`link→skills` 用作 `link/sub`），标记写进的是子目录，源目录里查不到，9 个技能被装进了 `skills/sub`。这才有了上面的 canary 反向上溯方案。
+
+最终 16 个向量（直指、仓库根、junction 指根、junction 指 skills、链式 junction、父组件 junction 深 1 级与深 2 级、多级不存在路径 × 安装/卸载）全部拒绝，源完好、零残留、canary 不残留；含空格与方括号的正常目标仍安装正常。POSIX 侧 `pwd -P` 本就解析符号链接，同样补上 canary 以求两端等价。
 
 **Important**
 
@@ -16,7 +25,7 @@
 - `worktree`：`.git/info/exclude` 字面路径在子模块（`.git` 是文件）和子目录下必然失败且不中断，会产出未被忽略的 worktree；改走 `git rev-parse --git-common-dir` 并要求 `check-ignore` 确认后才建
 - `code-review`：子代理拿不到主代理的上下文，而 brief 从未包含第 2 步找到的 spec 内容和第 3 步的标准文件清单；两处补齐。PR 编号不是 ref，补 `gh pr checkout` 前置
 - `diagnosing-bugs`：artifact loop 的进入闸门原先只有一句"穷尽以上"，无举证要求，构成绕开建复现回路的逃生舱；改为必须逐条写出 1–10 号构造法为何不适用，并为该路径显式豁免 Phase 2
-- CI：补 junction/符号链接向量（链式、父组件是链接）、`git status` 洁净断言、退出码须为 2 且含拒绝信息、外来技能存活断言、全文件数（非仅 SKILL.md）断言、diff 配方与 SKILL.md 的文本锚点绑定、npm 钉版本并回显错误、`concurrency` 与 `timeout-minutes`
+- CI：补 junction/符号链接向量（链式、父组件是链接、深两级）、`git status` 洁净断言、退出码须为 2 且**必须含 `refusing:` 报文**（只断言"非零退出"会把崩溃误判为拦截，这正是上面第 1 条假通过的成因）、外来技能存活断言、全文件数（非仅 SKILL.md）断言、diff 配方与 SKILL.md 的文本锚点绑定、npm 钉版本并回显错误、`concurrency` 与 `timeout-minutes`
 
 **Minor**
 

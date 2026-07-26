@@ -60,9 +60,25 @@ refuse() { undo_created; echo "refusing: target $dest_abs is the source (or alia
 case "$dest_abs/" in "$src"/*) refuse ;; esac
 case "$src/" in "$dest_abs"/*) refuse ;; esac
 
+# `pwd -P` above already resolved symlinks, so the prefix test covers linked
+# paths here. The canary is the belt to that suspenders: it also catches
+# aliases `pwd -P` cannot see, such as a bind mount or a hard-linked tree.
+canary=.lean-skills-canary-$$
+if : > "$src/$canary" 2>/dev/null; then
+  up=$dest_abs
+  i=0
+  while [ -n "$up" ] && [ "$i" -lt 64 ]; do
+    if [ -e "$up/$canary" ]; then rm -f "$src/$canary"; refuse; fi
+    parent=$(dirname -- "$up")
+    [ "$parent" = "$up" ] && break
+    up=$parent
+    i=$((i + 1))
+  done
+  rm -f "$src/$canary"
+fi
+
 probe=.lean-skills-probe-$$
 if : > "$dest_abs/$probe" 2>/dev/null; then
-  if [ -e "$src/$probe" ]; then rm -f "$dest_abs/$probe"; refuse; fi
   rm -f "$dest_abs/$probe"
 else
   echo "cannot write to target $dest_abs" >&2; exit 1
