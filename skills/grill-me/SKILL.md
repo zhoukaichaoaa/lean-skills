@@ -66,4 +66,4 @@ Then show me the document and stop. Building it is `/implement`, which reads thi
 
 ---
 
-_Merged from [mattpocock/skills](https://github.com/mattpocock/skills) `grill-me` + `grilling` (MIT) into one user-invoked skill; the plan document, its template and the completion criterion are additions — upstream persists decisions through `to-spec` and an issue tracker, which this collection does not require._
+_Merged from [mattpocock/skills](https://github.com/mattpocock/skills) `grill-me` + `grilling` (MIT) into one user-invoked skill. Added here: the written plan, its template, its on-disk location and the completion criterion — upstream persists decisions through `to-spec` and an issue tracker, which this collection does not require. Per-release detail: [NOTICE.md](https://github.com/zhoukaichaoaa/lean-skills/blob/main/NOTICE.md)._

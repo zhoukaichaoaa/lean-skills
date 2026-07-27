@@ -533,6 +533,31 @@ jobs:
               got_m = {w for w in _re.split(r'[,\s]+', m_part) if w}
               assert got_r == RESIDENT, f'{path}: resident line says {sorted(got_r)}'
               assert got_m == MANUAL, f'{path}: manual line says {sorted(got_m)}'
+          # Attribution rots quietly: before this check, six of nine footnotes
+          # carried no version at all and three named one up to five releases
+          # behind what had actually changed. The rule that stops it is single
+          # truth - NOTICE carries the per-release record, the footnote carries
+          # what the file is relative to upstream and a pointer here.
+          UPSTREAM = {'diagnosing-bugs': 'mattpocock', 'grill-me': 'mattpocock',
+                      'implement': 'mattpocock', 'tdd': 'mattpocock',
+                      'resolving-merge-conflicts': 'mattpocock', 'spec-review': 'mattpocock',
+                      'receiving-code-review': 'obra', 'worktree': 'obra',
+                      'verification-before-completion': 'obra'}
+          notice_body = io.open('NOTICE.md', encoding='utf-8').read()
+          for d in sorted(os.listdir('skills')):
+              body = io.open(f'skills/{d}/SKILL.md', encoding='utf-8').read()
+              assert '\n_' in body, f'{d}: no attribution footnote'
+              foot = body[body.rindex('\n_'):]
+              assert UPSTREAM[d] in foot, f'{d}: the footnote does not name its upstream'
+              assert '(MIT)' in foot, f'{d}: the footnote does not state the licence'
+              assert 'NOTICE.md' in foot, f'{d}: the footnote does not point at the per-release record'
+              # a version number in a footnote is a second changelog, and the
+              # second copy is the one that goes stale
+              stale = re.findall(r'(?<!Claude Code )\b\d+\.\d+\.\d+\b', foot)
+              assert not stale, f'{d}: footnote carries version numbers {stale}; that record belongs in NOTICE'
+              # ...and NOTICE must carry exactly one row for the file
+              rows = [l for l in notice_body.splitlines() if l.startswith(f'| `skills/{d}/SKILL.md`')]
+              assert len(rows) == 1, f'{d}: NOTICE has {len(rows)} rows for it, want exactly 1'
           # NOTICE quotes a word count for every rewritten skill. It has drifted
           # in five separate releases, so the file is now checked, not trusted.
           notice = io.open('NOTICE.md', encoding='utf-8').read()

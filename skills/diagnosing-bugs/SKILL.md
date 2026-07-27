@@ -143,4 +143,4 @@ Required before declaring done:
 
 ---
 
-_Adapted from [mattpocock/skills](https://github.com/mattpocock/skills) `diagnosing-bugs` (MIT). Changes: the second-attempt rule (idea from [obra/superpowers](https://github.com/obra/superpowers) `systematic-debugging`); the artifact loop for failures that cannot be re-run, gated on writing out why each of the ten constructions fails; description narrowed to hard bugs, performance regressions and surviving symptoms; dependencies on files outside this collection removed._
+_Adapted from [mattpocock/skills](https://github.com/mattpocock/skills) `diagnosing-bugs` (MIT). Changed here: the second-attempt rule (idea from [obra/superpowers](https://github.com/obra/superpowers) `systematic-debugging`); the artifact loop for failures that cannot be re-run, gated on writing out why each of the ten constructions fails; a description narrowed to hard bugs, performance regressions and surviving symptoms; dependencies on files outside this collection removed. Per-release detail: [NOTICE.md](https://github.com/zhoukaichaoaa/lean-skills/blob/main/NOTICE.md)._

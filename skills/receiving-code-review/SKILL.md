@@ -41,4 +41,4 @@ Every item is either implemented and tested, answered with reasoning, or waiting
 
 ---
 
-_Rewritten from [obra/superpowers](https://github.com/obra/superpowers) `receiving-code-review` (MIT), condensed and positively framed per [DOCTRINE.md](https://github.com/zhoukaichaoaa/lean-skills/blob/main/DOCTRINE.md)._
+_Rewritten from [obra/superpowers](https://github.com/obra/superpowers) `receiving-code-review` (MIT): condensed and positively framed per [DOCTRINE.md](https://github.com/zhoukaichaoaa/lean-skills/blob/main/DOCTRINE.md), with the maintainer's personal framing and the no-thanks rule dropped. Model-invoked here, because `implement` has to reach it. Per-release detail: [NOTICE.md](https://github.com/zhoukaichaoaa/lean-skills/blob/main/NOTICE.md)._

@@ -12,7 +12,7 @@ Requires python (with PyYAML) and bash. The CI steps are read straight out of
 .github/workflows/ci.yml, so this cannot drift from what CI actually runs.
 Windows-only steps are skipped here; the `install.ps1` leg is exercised by CI.
 """
-import io, os, shutil, subprocess, sys, tempfile
+import io, os, re, shutil, subprocess, sys, tempfile
 
 try:
     import yaml
@@ -81,6 +81,21 @@ GUARD_GOOD = '  case "$CLAUDE_SKILLS_DIR" in\n    *[![:blank:]]*) : ;;\n    *) e
 
 GUARD_BAD = '  case "$CLAUDE_SKILLS_DIR" in\n    "" |" "*) : ;;\n    /*|[A-Za-z]:[\\\\/]*) : ;;\n    *) echo "CLAUDE_SKILLS_DIR must be an absolute path (got: \'$CLAUDE_SKILLS_DIR\')" >&2; exit 2 ;;\n  esac\n  case "$CLAUDE_SKILLS_DIR" in\n    *[![:blank:]]*) : ;;\n    *) echo "CLAUDE_SKILLS_DIR is set but blank — unset it for the default, or give it a path" >&2; exit 2 ;;\n  esac'
 
+def bump_a_word_count():
+    """Add one to whichever number NOTICE currently claims for worktree.
+
+    Reading the number instead of hardcoding it keeps this case working across
+    releases - a hardcoded 877 stopped matching the moment the file was edited.
+    """
+    p = os.path.join(work, 'NOTICE.md')
+    t = io.open(p, encoding='utf-8', newline='').read()
+    m = re.search(r'1069 \u2192 (\d+) \u8bcd', t)
+    if not m:
+        raise AssertionError('NOTICE no longer states a worktree word count')
+    t = t[:m.start(1)] + str(int(m.group(1)) + 1) + t[m.end(1):]
+    io.open(p, 'w', encoding='utf-8', newline='').write(t)
+
+
 CASES = [
     # (label, leg, mutation)
     ('parity: continue-on-error hides a step', 'par', lambda: edit(
@@ -133,8 +148,14 @@ CASES = [
         '.claude-plugin/plugin.json', '9 skills, 5 resident', '19 skills, 5 resident')),
     ('changelog: version demoted from a heading', 'meta', lambda: edit(
         'CHANGELOG.md', '## %s —' % VERSION, '## Unreleased (was %s) —' % VERSION)),
-    ('notice: a word count drifts by one', 'meta', lambda: edit(
-        'NOTICE.md', '1069 → 877 词', '1069 → 878 词')),
+    ('notice: a continuation row splits one file in two', 'meta', lambda: edit(
+        'NOTICE.md', '| `skills/worktree/SKILL.md` |',
+        '| `skills/worktree/SKILL.md`(cont) | - | extra |' + chr(10) + '| `skills/worktree/SKILL.md` |')),
+    ('footnote: a version number creeps back in', 'meta', lambda: edit(
+        'skills/worktree/SKILL.md', 'Per-release detail:', 'Renamed in 0.3.0. Per-release detail:')),
+    ('footnote: the pointer to NOTICE is dropped', 'meta', lambda: edit(
+        'skills/tdd/SKILL.md', 'Per-release detail: [NOTICE.md](https://github.com/zhoukaichaoaa/lean-skills/blob/main/NOTICE.md).', '')),
+    ('notice: a word count drifts by one', 'meta', bump_a_word_count),
 
     ('skill: @{upstream} back as a prescribed command', 'rec', lambda: edit(
         'skills/spec-review/SKILL.md',

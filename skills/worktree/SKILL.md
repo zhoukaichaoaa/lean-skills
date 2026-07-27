@@ -67,4 +67,4 @@ Report the workspace path, the branch, and the baseline test result as actual co
 
 ---
 
-_Condensed from [obra/superpowers](https://github.com/obra/superpowers) `using-git-worktrees` (MIT) and renamed from `using-git-worktrees`; branch naming, repo-local exclude via `--git-common-dir`, lockfile-driven package-manager detection, the `WTDIR` single-variable rule, the `--is-inside-work-tree` gate, Step 3 (teardown) and the completion criterion are all additions._
+_Condensed from [obra/superpowers](https://github.com/obra/superpowers) `using-git-worktrees` (MIT) and renamed from `using-git-worktrees`. Kept: the detection order, the submodule guard, native tools first, the gitignore check, the baseline test. Added here: branch naming, repo-local exclude via `--git-common-dir`, lockfile-driven package-manager detection, the single-`WTDIR` rule, the `--is-inside-work-tree` gate, teardown and the completion criterion. Per-release detail: [NOTICE.md](https://github.com/zhoukaichaoaa/lean-skills/blob/main/NOTICE.md)._

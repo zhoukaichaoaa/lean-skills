@@ -44,4 +44,4 @@ Name the command you would run and why you can't (no network, needs a device, ne
 
 ---
 
-_Adapted from [obra/superpowers](https://github.com/obra/superpowers) `verification-before-completion` (MIT), rewritten to the positive-framing and pruning rules in [DOCTRINE.md](https://github.com/zhoukaichaoaa/lean-skills/blob/main/DOCTRINE.md)._
+_Adapted from [obra/superpowers](https://github.com/obra/superpowers) `verification-before-completion` (MIT), rewritten to the positive-framing and pruning rules in [DOCTRINE.md](https://github.com/zhoukaichaoaa/lean-skills/blob/main/DOCTRINE.md). Kept: the gate itself and the claim-to-evidence table. Dropped: the Red Flags and Rationalization sections, which are almost entirely prohibitions. Per-release detail: [NOTICE.md](https://github.com/zhoukaichaoaa/lean-skills/blob/main/NOTICE.md)._
