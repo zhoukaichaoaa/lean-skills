@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.1 — 2026-07-27
+
+macOS 覆盖补齐 —— 上一版 macOS 只执行了 CI 五个步骤里的一个。
+
+- 两个 git 配方回归（正是因为合并技能连出三轮 bug 才加的）此前被 `if: runner.os == 'Linux'` 挡掉，从未在 BSD 的 `comm`/`find`/`sed`/`grep` 与 bash 3.2 下跑过。改为 `!= 'Windows'`，macOS 实测通过。`paste -sd,` 换成 `tr`/`sed`，不再赌 BSD 的参数解析。
+- 新增 **worktree 与 .plans 路径配方**的回归 —— 这两条契约此前**任何平台都没测过**，而后者正是 0.6.0 整个计划枢纽的地基。覆盖：`check-ignore` 对尚不存在目录的假阴性、`WTDIR` 三处一致、计划路径从 linked worktree 内解析到主检出、worktree 拆除、非仓库目录的 Step 0 判定。
+- 新增 **`platform parity` 守卫**：任何步骤只要被限制在单一平台，CI 直接红，除非在豁免表里写明理由（目前三条：`install.ps1` 只有 Windows 有 PowerShell、`manifests` 是纯文件解析、`plugin validate` 装 npm 包跑一次够）。已做变异测试确认它真会红。
+- 发布清单加一条：**任何改动都要双平台落地并各自有断言**。一端有断言、另一端没有，等于没有 —— 这一版和上一版各栽过一次。
+
+**技能本身的 macOS 适配**（静态扫描 + macOS 实跑确认）：技能正文只用到 `git`/`gh`/`grep`/`find`/`echo`/`test` 与包管理器，零处 GNU 专有惯用法（`sed -i`、`readlink -f`、`grep -P`、`stat -c`、`date -d` 等均无），零处 Linux 专有路径；用到的 git 子命令最低要求 2.23（`restore --staged`），macOS 自带 Xcode CLT git 为 2.39+。
+
 ## 0.9.0 — 2026-07-27
 
 三份独立审计并行：命令级实测、CI 变异测试、声明对账。这轮的目标是把**故障形状**修掉，而不是再修一批实例。
@@ -226,4 +237,4 @@ CI 的 git 配方回归新增一例：推一个 `dev` 分支到远端后，断�
 
 ---
 
-**发布清单**：改 manifests 版本号 → **更新 NOTICE 的逐文件行并用 `wc -w` 重算词数** → 更新本文件 → 本地把 CI 的每条腿在干净克隆上原样跑一遍 → commit & push → CI 绿 → `git tag vX.Y.Z && git push --tags` → `gh release create` → 核对 GitHub description → `claude plugin validate --strict .`
+**发布清单**：**任何改动都要 Windows 与 macOS 双平台落地并各自有断言**（`install.sh` 与 `install.ps1` 同时改；CI 步骤默认 `if: runner.os != 'Windows'`，单平台步骤须在 `platform parity` 的豁免表里写明理由）→ 改 manifests 版本号 → **更新 NOTICE 的逐文件行并用 `wc -w` 重算词数** → 更新本文件 → 本地把 CI 的每条腿在干净克隆上原样跑一遍 → commit & push → CI 绿 → `git tag vX.Y.Z && git push --tags` → `gh release create` → 核对 GitHub description → `claude plugin validate --strict .`

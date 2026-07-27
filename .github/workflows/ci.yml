@@ -548,6 +548,42 @@ jobs:
           fi
           echo "worktree recipes: ignore gate, WTDIR consistency, plan path across a worktree, teardown"
 
+      - name: platform parity
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Every contract must be asserted on both Windows and macOS. A step
+          # gated to one platform is a contract only that platform has.
+          # Allowed exceptions are listed here by name, with the reason.
+          python3 - <<'EOF'
+          import io, yaml
+          allowed = {
+              'install.ps1': 'PowerShell only exists on Windows',
+              'manifests and frontmatter': 'parses files; no platform surface',
+              'official plugin validation (strict)': 'installs an npm package; one platform is enough',
+              'platform parity': 'this check itself',
+          }
+          steps = yaml.safe_load(io.open('.github/workflows/ci.yml', encoding='utf-8'))['jobs']['install']['steps']
+          bad = []
+          for s in steps:
+              name = s.get('name')
+              if not name or name in allowed:
+                  continue
+              cond = s.get('if', '')
+              if cond and "!= 'Windows'" not in cond:
+                  bad.append((name, cond))
+          if bad:
+              for n, c in bad:
+                  print(f'step "{n}" is gated to one platform: if: {c}')
+              print('Gate it with  if: runner.os != Windows  so macOS runs it too,')
+              print('or add the step to the allowed list above with a reason.')
+              raise SystemExit(1)
+          covered = [s.get('name') for s in steps
+                     if s.get('name') and s.get('name') not in allowed]
+          print('platform parity: these run on macOS as well as Linux ->', ', '.join(covered))
+          EOF
+
       - name: official plugin validation (strict)
         if: runner.os == 'Linux'
         shell: bash
