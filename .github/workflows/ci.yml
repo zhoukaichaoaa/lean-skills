@@ -327,7 +327,7 @@ jobs:
           EOF
 
       - name: spec-review's diff recipe captures every change class
-        if: runner.os == 'Linux'
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
@@ -374,7 +374,7 @@ jobs:
           echo "diff recipe: all change classes visible; degradation modes confirmed"
 
       - name: git recipes in the skills actually run
-        if: runner.os == 'Linux'
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
@@ -451,9 +451,9 @@ jobs:
             echo "fixture no longer shows the unrelated-histories case"; exit 1
           fi
           EMPTYTREE=$(git hash-object -t tree /dev/null)
-          BRINGS=$(git diff --name-only "$EMPTYTREE" MERGE_HEAD | sort | paste -sd, -)
+          BRINGS=$(git diff --name-only "$EMPTYTREE" MERGE_HEAD | sort | tr -s '[:space:]' ',' | sed 's/,$//')
           test "$BRINGS" = "b-only.txt,shared.txt" || { echo "empty-tree base brings [$BRINGS]"; exit 1; }
-          COLLAPSED=$(git diff --name-only MERGE_HEAD | sort | paste -sd, -)
+          COLLAPSED=$(git diff --name-only MERGE_HEAD | sort | tr -s '[:space:]' ',' | sed 's/,$//')
           test "$COLLAPSED" != "$BRINGS" || { echo "fixture no longer shows why a collapsed base is wrong"; exit 1; }
 
           new_repo "$RUNNER_TEMP/r-cp"
