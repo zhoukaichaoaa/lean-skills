@@ -493,6 +493,61 @@ jobs:
           git merge-base refs/remotes/origin/dev HEAD >/dev/null
           echo "git recipes: merge range, restore split, per-operation refs and base selection all behave as documented"
 
+      - name: worktree and plan-path recipes actually run
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          W=skills/worktree/SKILL.md
+          grep -qF 'WTDIR=.worktrees' "$W"
+          grep -qF 'git check-ignore -q "$WTDIR/$BRANCH"' "$W"
+          grep -qF 'git rev-parse --is-inside-work-tree' "$W"
+          grep -qF 'git worktree remove' "$W"
+
+          R="$RUNNER_TEMP/r-wt"; rm -rf "$R"; git init -q "$R"; cd "$R"
+          git config user.email ci@ci; git config user.name ci
+          echo x > f.txt; git add -A; git commit -qm base
+
+          # the skill says: test a path INSIDE the directory, because a pattern
+          # ending in / cannot match a path that does not exist yet
+          BRANCH=fix-thing
+          WTDIR=.worktrees
+          echo "$WTDIR/" >> "$(git rev-parse --git-common-dir)/info/exclude"
+          if git check-ignore -q "$WTDIR"; then
+            echo "fixture no longer shows the directory-itself false negative"; exit 1
+          fi
+          git check-ignore -q "$WTDIR/$BRANCH"
+
+          # and the mismatch the WTDIR variable exists to prevent
+          if git check-ignore -q "worktrees/$BRANCH"; then
+            echo "a differently-named directory was somehow already ignored"; exit 1
+          fi
+
+          git worktree add -q "$WTDIR/$BRANCH" -b "$BRANCH"
+          test -z "$(git status --porcelain)" || { echo "the worktree was not ignored"; exit 1; }
+
+          # the plan path must resolve to the main checkout from inside the worktree
+          mkdir -p "$(git rev-parse --git-common-dir)/../.plans"
+          echo "# plan" > "$(git rev-parse --git-common-dir)/../.plans/$BRANCH.md"
+          cd "$WTDIR/$BRANCH"
+          test ! -e .plans || { echo "fixture is wrong: an untracked .plans entered the worktree"; exit 1; }
+          test -f "$(git rev-parse --git-common-dir)/../.plans/$BRANCH.md"             || { echo "the plan path does not resolve from inside a worktree"; exit 1; }
+          cd "$R"
+
+          # teardown, and the two loud failures the skill relies on
+          if git worktree remove "$WTDIR/nope" 2>/dev/null; then
+            echo "removing a non-worktree should fail"; exit 1
+          fi
+          git worktree remove "$WTDIR/$BRANCH"
+          test ! -e "$WTDIR/$BRANCH"
+
+          # outside a repository, the Step 0 gate must not read as a normal checkout
+          mkdir -p "$RUNNER_TEMP/not-a-repo"; cd "$RUNNER_TEMP/not-a-repo"
+          if [ "$(git rev-parse --is-inside-work-tree 2>/dev/null || true)" = "true" ]; then
+            echo "the non-repository gate does not hold"; exit 1
+          fi
+          echo "worktree recipes: ignore gate, WTDIR consistency, plan path across a worktree, teardown"
+
       - name: official plugin validation (strict)
         if: runner.os == 'Linux'
         shell: bash
