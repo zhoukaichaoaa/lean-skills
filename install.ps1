@@ -162,9 +162,7 @@ foreach ($dir in $srcDirs) {
 
   # Anything at our name without our marker is either yours or a pre-0.7.0
   # install of ours. We cannot tell, so we do not guess: keep it unless -Adopt.
-  if ((Test-Path -LiteralPath $target) -and -not (Test-Ours $target) -and $Adopt) {
-    Write-Host "  adopting  $($dir.Name) (had no marker; its contents are being replaced)"
-  }
+  $adopting = (Test-Path -LiteralPath $target) -and -not (Test-Ours $target) -and $Adopt
   if ((Test-Path -LiteralPath $target) -and -not (Test-Ours $target) -and -not $Adopt) {
     Write-Host "  kept      $($dir.Name) (no ownership marker)"
     $kept++
@@ -186,6 +184,7 @@ foreach ($dir in $srcDirs) {
 
   # Copy beside the target first, then swap, so an interrupted copy leaves the
   # previously installed skill intact instead of a half-written one.
+  if ($adopting) { Write-Host "  adopting  $($dir.Name) (had no marker; replacing its contents)" }
   $staging = Join-Path $destAbs ".lean-skills-staging-$PID"
   if (Test-Path -LiteralPath $staging) { Remove-Item -Recurse -Force -LiteralPath $staging }
   Copy-Item -Recurse -LiteralPath $dir.FullName -Destination $staging

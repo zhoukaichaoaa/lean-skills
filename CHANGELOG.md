@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.2 — 2026-07-27
+
+第五方审计。两条发现均先复现再修。
+
+- **Important —— PR 的 `baseRefName` 是分支名，不是可用的 ref。** `gh pr view --json baseRefName` 返回 `dev` 这样的裸名，而本地通常只有 `origin/dev`。实测：`git rev-parse --verify dev` 退出 128，`git merge-base dev HEAD` 同样失败 —— 随后按原文会滑到下一档，**用默认分支 `main` 去审一个目标为 `dev` 的 PR**，diff 边界完全错位，所有发现都是虚构。现在要求：用 `baseRepository` 匹配对应的 remote（fork PR 的目标是上游 remote，不是 `origin`），解析成字面的 `refs/remotes/<remote>/<baseRefName>`，缺了就 fetch；**PR 存在但基线解析不了时停下报告，不许退回默认分支**。
+- **Minor —— `--adopt` 在用户确认之前就宣称正在覆盖。** 提示打印在确认闸门之前，用户答 No 之后又打印 `kept`，前后矛盾（实测：说了「正在覆盖」，用户内容原样保留）。提示移到确认之后、真正复制之前。
+
+CI 的 git 配方回归新增一例：推一个 `dev` 分支到远端后，断言裸 `dev` 解析不了而 `refs/remotes/origin/dev` 可以 —— 这正是上面那条 Important 的成因。
+
 ## 0.8.1 — 2026-07-27
 
 第四方审计。三条 Important 全部先复现再修，且全部出在 0.8.0 我自己重写的技能里。

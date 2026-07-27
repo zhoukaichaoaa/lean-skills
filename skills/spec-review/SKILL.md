@@ -18,11 +18,15 @@ You run as a forked subagent with none of the caller's conversation. Everything 
 
 `$ARGUMENTS` carries a base ref (a commit SHA, `main`, `HEAD~5`) and optionally a spec path — `base=<sha> spec=<path>`, or just the two values.
 
-With no base ref, work down this list and stop at the first that resolves:
+With no base ref, work down this list:
 
-1. The PR's base branch, if this branch has an open PR — `gh pr view --json baseRefName -q .baseRefName`.
-2. The remote's default branch — `git symbolic-ref refs/remotes/origin/HEAD` (or `origin/main`, `origin/master`).
-3. Nothing. Make "no base ref, and none could be inferred" the whole report.
+1. **An open PR on this branch.** `gh pr view --json baseRefName,baseRepository` gives you a **branch name, not a ref** — `dev`, not `origin/dev`. A local branch of that name usually does not exist, and `git merge-base dev HEAD` then fails with exit 128. Resolve it yourself: find the remote whose URL matches `baseRepository` (`git remote -v`; for a fork PR that is the upstream remote, not `origin`), and use the literal `refs/remotes/<that-remote>/<baseRefName>`. Fetch it if it is missing (`git fetch <remote> <baseRefName>`).
+
+   **A PR exists but its base cannot be resolved? Stop and report that.** Do not slide down to step 2 — reviewing a PR that targets `release/3.2` against `main` produces a diff full of other people's commits, and every finding drawn from it is fiction.
+
+2. **No PR at all** — the remote's default branch: `git symbolic-ref refs/remotes/origin/HEAD`, else `origin/main` / `origin/master`.
+
+3. Nothing resolves. Make "no base ref, and none could be inferred" the whole report.
 
 **Never fall back to `@{upstream}`.** On a feature branch that has been pushed, the upstream *is* this branch: `git merge-base HEAD @{upstream}` returns HEAD, the diff comes back empty, and you review only the uncommitted scraps while every commit on the branch escapes silently. You are a forked subagent — you cannot ask a question and wait for an answer, so a wrong default here is never corrected.
 

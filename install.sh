@@ -178,8 +178,9 @@ for dir in "$src"/*/; do
 
   # Anything at our name without our marker is either yours or a pre-0.7.0
   # install of ours. We cannot tell, so we do not guess: keep it unless --adopt.
+  adopting=0
   if [ -e "$dest_abs/$name" ] && ! is_ours "$dest_abs/$name" && [ "$adopt" -eq 1 ]; then
-    echo "  adopting  $name (had no marker; its contents are being replaced)" >&2
+    adopting=1
   fi
   if [ -e "$dest_abs/$name" ] && ! is_ours "$dest_abs/$name" && [ "$adopt" -eq 0 ]; then
     echo "  kept      $name (no ownership marker)"
@@ -205,6 +206,7 @@ for dir in "$src"/*/; do
 
   # Copy beside the target first, then swap, so an interrupted copy leaves the
   # previously installed skill intact instead of a half-written one.
+  [ "$adopting" -eq 1 ] && echo "  adopting  $name (had no marker; replacing its contents)" >&2
   staging=$dest_abs/.lean-skills-staging-$$
   rm -rf "$staging"
   cp -R "${dir%/}" "$staging"

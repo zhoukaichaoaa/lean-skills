@@ -284,6 +284,7 @@ jobs:
           grep -qF 'REVERT_HEAD^ REVERT_HEAD' "$M"
           grep -qF 'git restore --staged --' "$M"
           grep -qF 'Never fall back to' "$S"
+          grep -qF 'refs/remotes/<that-remote>/<baseRefName>' "$S"
 
           new_repo() {
             rm -rf "$1"; git init -q "$1"; cd "$1"
@@ -336,6 +337,15 @@ jobs:
           test "$(git merge-base HEAD '@{upstream}')" = "$(git rev-parse HEAD)"
           test -z "$(git diff --name-only "$(git merge-base HEAD '@{upstream}')")"
           git merge-base HEAD origin/main >/dev/null
+
+          # a PR's baseRefName is a branch name, not a usable ref
+          git push -q origin HEAD:dev
+          git fetch -q origin
+          if git rev-parse --verify dev >/dev/null 2>&1; then
+            echo "fixture no longer shows that a bare base branch name may not resolve"; exit 1
+          fi
+          git rev-parse --verify refs/remotes/origin/dev >/dev/null
+          git merge-base refs/remotes/origin/dev HEAD >/dev/null
           echo "git recipes: merge range, restore split, per-operation refs and base selection all behave as documented"
 
       - name: official plugin validation (strict)
