@@ -8,6 +8,8 @@
 - **`ls-remote` 只问不取。** `spec-review` 解析出默认分支后直接 `merge-base`，而在 `--single-branch` / 浅克隆（CI 的常态）里那个对象根本不在本地。实测（`file://` 真实传输）：`ls-remote` 正确返回 `main @ d4ca7a5`，但 `cat-file -e` 与 `merge-base` 双双 exit 128 —— 评审就此停住。补上 `git fetch origin "+refs/heads/<default>:refs/remotes/origin/<default>"`，并说明 fetch 后仍失败意味着浅克隆边界，要停下或经授权 deepen。
 - **`gh` 失败不等于没有 PR。** 未安装、未认证、离线、限流、API 报错都不是"没有 PR"的证据，而原文会滑到默认分支继续审。改为：只有明确的 "no pull requests found" 才允许回退，其余原样报错并停止。同时 `baseRefOid` 拿到后要先 `git cat-file -e` 确认对象在本地，不在就 fetch。
 
+**CI 的 SIGPIPE 修复**（macOS 首次跑新夹具就红了，正是双平台覆盖的价值）：`set -o pipefail` 下 `git ... | grep -q` 会因 `grep` 命中即退出而让左侧收到 SIGPIPE，整条管道返回 141。Linux 上碰巧不触发，macOS 时序不同就炸。全部 24 处改为 here-string（`grep -q pat <<<"$(cmd)"`），无管道即无 SIGPIPE。
+
 **CI** 新增按审计要求的五种完成范围夹具（单次 cherry-pick、rebase 到已有提交的 base、merge 的 first-parent、revert、边界与 `ORIG_HEAD` 的对照）以及 `ls-remote` 不下载对象的夹具，全部在 Linux 与 macOS 两个平台跑。
 
 ### 关于被移动过的 v0.9.0 标签

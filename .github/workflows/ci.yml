@@ -353,19 +353,20 @@ jobs:
           git mv old-name.txt new-name.txt
           PATCH=$(git diff "$BASE_SHA")
           STATUS=$(git status --porcelain)
-          echo "$PATCH"  | grep -q 'committed-change'
-          echo "$PATCH"  | grep -q 'staged-content'
-          echo "$PATCH"  | grep -q 'unstaged-change'
-          echo "$PATCH"  | grep -q 'gone.txt'
-          echo "$PATCH"  | grep -q 'new-name.txt'
-          echo "$STATUS" | grep -q 'un tracked.txt'
+          grep -q 'committed-change' <<<"$PATCH"
+          grep -q 'staged-content' <<<"$PATCH"
+          grep -q 'unstaged-change' <<<"$PATCH"
+          grep -q 'gone.txt' <<<"$PATCH"
+          grep -q 'new-name.txt' <<<"$PATCH"
+          grep -q 'un tracked.txt' <<<"$STATUS"
           # The skill warns that an empty base silently degrades `git diff <BASE_SHA>`
           # into an unstaged-only diff. Prove it on a file that is *only* staged —
           # unlike a modified file, it cannot leak in as diff context.
-          if git diff ${UNSET_ON_PURPOSE:-} --name-only | grep -qx 'staged.txt'; then
+          if grep -qx 'staged.txt' <<<"$(git diff ${UNSET_ON_PURPOSE:-} --name-only)"; then
             echo "empty-base diff should NOT see staged files"; exit 1
           fi
-          git diff "$BASE_SHA" --name-only | grep -qx 'staged.txt'   # but the real base does
+          # ...but the real base does see it
+          grep -qx 'staged.txt' <<<"$(git diff "$BASE_SHA" --name-only)"
           # and that a bad fixed point fails loudly rather than silently
           git merge-base "$BASE_SHA" HEAD >/dev/null
           if git merge-base HEAD 0000000000000000000000000000000000000000 >/dev/null 2>&1; then
@@ -418,7 +419,7 @@ jobs:
           test -n "$BASE" || { echo "merge-base printed nothing on a normal merge"; exit 1; }
           BRINGS=$(git diff --name-only "$BASE" MERGE_HEAD)
           test "$BRINGS" = "f.txt" || { echo "merge brings [$BRINGS], want f.txt"; exit 1; }
-          if ! git diff --name-only HEAD MERGE_HEAD | grep -q side.txt; then
+          if ! grep -q side.txt <<<"$(git diff --name-only HEAD MERGE_HEAD)"; then
             echo "fixture no longer shows why HEAD..MERGE_HEAD is the wrong range"; exit 1
           fi
           echo user > staged.txt; git add staged.txt
@@ -431,12 +432,12 @@ jobs:
             echo "expected git restore --staged to reject an untracked path"; exit 1
           fi
           echo resolved > f.txt; git add f.txt; git commit -qm merged
-          git show --name-only --format= HEAD | grep -qx f.txt
-          if git show --name-only --format= HEAD | grep -q staged.txt; then
+          grep -qx f.txt <<<"$(git show --name-only --format= HEAD)"
+          if grep -q staged.txt <<<"$(git show --name-only --format= HEAD)"; then
             echo "the user's staged file landed in the merge commit"; exit 1
           fi
-          git status --porcelain | grep -q '^?? untracked.txt'
-          git status --porcelain | grep -q '^ M side.txt'
+          grep -q '^?? untracked.txt' <<<"$(git status --porcelain)"
+          grep -q '^ M side.txt' <<<"$(git status --porcelain)"
 
           # unrelated histories: merge-base prints nothing, and an empty base must not
           # be substituted into the diff - it would compare against the working tree
@@ -459,7 +460,7 @@ jobs:
           new_repo "$RUNNER_TEMP/r-cp"
           git cherry-pick feat >/dev/null 2>&1 || true
           test -f "$(git rev-parse --git-dir)/CHERRY_PICK_HEAD"
-          git diff --name-only CHERRY_PICK_HEAD^ CHERRY_PICK_HEAD | grep -qx f.txt
+          grep -qx f.txt <<<"$(git diff --name-only CHERRY_PICK_HEAD^ CHERRY_PICK_HEAD)"
           if git diff --name-only REBASE_HEAD^ REBASE_HEAD >/dev/null 2>&1; then
             echo "REBASE_HEAD resolved during a cherry-pick; the per-operation split is moot"; exit 1
           fi
@@ -468,10 +469,10 @@ jobs:
           new_repo "$RUNNER_TEMP/r-mv"
           git merge feat >/dev/null 2>&1 || true
           git mv side.txt renamed.txt
-          if git diff --cached --name-only HEAD | grep -qx side.txt; then
+          if grep -qx side.txt <<<"$(git diff --cached --name-only HEAD)"; then
             echo "fixture no longer shows --name-only hiding the old path"; exit 1
           fi
-          git diff --cached --name-status -M HEAD | grep -q 'side.txt'
+          grep -q 'side.txt' <<<"$(git diff --cached --name-status -M HEAD)"
 
           new_repo "$RUNNER_TEMP/r-up"
           git init -q --bare "$RUNNER_TEMP/origin.git"
@@ -581,8 +582,8 @@ jobs:
           echo wip > user.txt
           echo resolved > f.txt; git add f.txt
           git -c core.editor=true cherry-pick --continue >/dev/null 2>&1
-          git log --name-only --oneline "$BOUND..HEAD" | grep -qx f.txt
-          git status --porcelain -- user.txt | grep -q 'user.txt'
+          grep -qx f.txt <<<"$(git log --name-only --oneline "$BOUND..HEAD")"
+          grep -q 'user.txt' <<<"$(git status --porcelain -- user.txt)"
 
           # rebase onto a base that already carries other commits
           seed "$RUNNER_TEMP/s-rb"
@@ -595,11 +596,11 @@ jobs:
           test -n "$ONTO" || { echo "no onto recorded during rebase"; exit 1; }
           echo resolved > f.txt; git add f.txt
           git -c core.editor=true rebase --continue >/dev/null 2>&1
-          git log --name-only --oneline "$ONTO..HEAD" | grep -q user-wip.txt
-          if git log --name-only --oneline "$ONTO..HEAD" | grep -qx onbase.txt; then
+          grep -q user-wip.txt <<<"$(git log --name-only --oneline "$ONTO..HEAD")"
+          if grep -qx onbase.txt <<<"$(git log --name-only --oneline "$ONTO..HEAD")"; then
             echo "the onto boundary still sweeps in commits already on the base"; exit 1
           fi
-          if ! git log --name-only --oneline "$(git rev-parse ORIG_HEAD)..HEAD" | grep -qx onbase.txt; then
+          if ! grep -qx onbase.txt <<<"$(git log --name-only --oneline "$(git rev-parse ORIG_HEAD)..HEAD")"; then
             echo "fixture no longer shows why ORIG_HEAD is the wrong boundary"; exit 1
           fi
 
@@ -608,8 +609,8 @@ jobs:
           git merge feat >/dev/null 2>&1 || true
           echo wip > user.txt
           echo resolved > f.txt; git add f.txt; git commit -qm merged
-          git diff --name-only HEAD^1 HEAD | grep -qx f.txt
-          git status --porcelain -- user.txt | grep -q 'user.txt'
+          grep -qx f.txt <<<"$(git diff --name-only HEAD^1 HEAD)"
+          grep -q 'user.txt' <<<"$(git status --porcelain -- user.txt)"
 
           # revert
           seed "$RUNNER_TEMP/s-rv"
@@ -619,7 +620,7 @@ jobs:
           if [ -f .git/REVERT_HEAD ]; then
             echo resolved > f.txt; git add f.txt
             git -c core.editor=true revert --continue >/dev/null 2>&1
-            git log --name-only --oneline "$BOUND..HEAD" | grep -qx f.txt
+            grep -qx f.txt <<<"$(git log --name-only --oneline "$BOUND..HEAD")"
           fi
 
           # ls-remote resolves a name but downloads nothing
