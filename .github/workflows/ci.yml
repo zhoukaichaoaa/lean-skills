@@ -79,7 +79,9 @@ jobs:
           # a skill of the user's that happens to share one of our names
           mkdir -p "$T/tdd-user-check" && : > "$T/tdd-user-check/SKILL.md"
           rm -rf "$T/tdd" && mkdir -p "$T/tdd" && echo USER-OWNED > "$T/tdd/SKILL.md"
-          CLAUDE_SKILLS_DIR="$T" ./install.sh -y >/dev/null
+          # install now exits 3 when it keeps something it cannot claim
+          set +e; CLAUDE_SKILLS_DIR="$T" ./install.sh -y >/dev/null 2>&1; rc=$?; set -e
+          test "$rc" -eq 3 || { echo "install keeping a user skill should exit 3, got $rc"; exit 1; }
           grep -q USER-OWNED "$T/tdd/SKILL.md"                  # install must not clobber it
           # uninstall now exits 3 when it spares something it cannot claim
           set +e; CLAUDE_SKILLS_DIR="$T" ./install.sh --uninstall >/dev/null 2>&1; rc=$?; set -e
@@ -170,7 +172,8 @@ jobs:
           Remove-Item -Recurse -Force -LiteralPath (Join-Path $T 'tdd')
           [IO.Directory]::CreateDirectory((Join-Path $T 'tdd')) | Out-Null
           [IO.File]::WriteAllText((Join-Path $T 'tdd\SKILL.md'), 'USER-OWNED')
-          .\install.ps1 -Yes | Out-Null
+          & powershell -NoProfile -File .\install.ps1 -Yes | Out-Null
+          if ($LASTEXITCODE -ne 3) { throw "install keeping a user skill should exit 3, got $LASTEXITCODE" }
           if ((Get-Content -Raw -LiteralPath (Join-Path $T 'tdd\SKILL.md')) -notmatch 'USER-OWNED') {
             throw "install clobbered a user-owned same-named skill"
           }
