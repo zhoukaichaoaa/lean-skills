@@ -81,7 +81,9 @@ jobs:
           rm -rf "$T/tdd" && mkdir -p "$T/tdd" && echo USER-OWNED > "$T/tdd/SKILL.md"
           CLAUDE_SKILLS_DIR="$T" ./install.sh -y >/dev/null
           grep -q USER-OWNED "$T/tdd/SKILL.md"                  # install must not clobber it
-          CLAUDE_SKILLS_DIR="$T" ./install.sh --uninstall >/dev/null
+          # uninstall now exits 3 when it spares something it cannot claim
+          set +e; CLAUDE_SKILLS_DIR="$T" ./install.sh --uninstall >/dev/null 2>&1; rc=$?; set -e
+          test "$rc" -eq 3 || { echo "uninstall sparing a user skill should exit 3, got $rc"; exit 1; }
           test -f "$T/not-ours/SKILL.md"                       # a foreign skill survives
           grep -q USER-OWNED "$T/tdd/SKILL.md"                  # ...including a same-named one
           test "$(find "$T" -name SKILL.md | wc -l)" -eq 3      # ours are gone, three of theirs remain
@@ -172,7 +174,9 @@ jobs:
           if ((Get-Content -Raw -LiteralPath (Join-Path $T 'tdd\SKILL.md')) -notmatch 'USER-OWNED') {
             throw "install clobbered a user-owned same-named skill"
           }
-          .\install.ps1 -Uninstall | Out-Null
+          # uninstall now exits 3 when it spares something it cannot claim
+          & powershell -NoProfile -File .\install.ps1 -Uninstall | Out-Null
+          if ($LASTEXITCODE -ne 3) { throw "uninstall sparing a user skill should exit 3, got $LASTEXITCODE" }
           if (-not (Test-Path -LiteralPath (Join-Path $T 'not-ours\SKILL.md'))) { throw "uninstall removed a foreign skill" }
           if ((Get-Content -Raw -LiteralPath (Join-Path $T 'tdd\SKILL.md')) -notmatch 'USER-OWNED') {
             throw "uninstall removed a user-owned same-named skill"
