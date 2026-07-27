@@ -34,6 +34,8 @@
 
 本版之前，有 4 个提交的作者邮箱不属于本账号。已重写为账号自己的 noreply 地址；由于强推只移动引用、孤立对象仍可按 SHA 取到，仓库整体删除后重建，15 个标签与 15 个 Release 全量恢复（正文逐字未改，总词数 3012 对 3012）。推送改用仓库级 deploy key，不再依赖账号级凭据。
 
+**macOS 上又抛一个，而且是被“防止测空气”的守卫抦下的**：故障注入用的 `PATH="$Fi/bin:$PATH" command -v mv` 这种“前缀赋值 + 内建命令”写法，bash 5（Linux / Git Bash）下正常，**bash 3.2（macOS runner）下内建命令看不到那个临时 PATH**，于是找到的仍是 `/bin/mv`。守卫因此报了“this test would measure nothing” 并让 CI 变红 —— 这正是它存在的意义。改为先在 shell 里赋值再调用。本机是 bash 5，两种写法都正常，这条只能靠 CI 的 macOS 腿发现。
+
 **验证**：CI 的 9 条 run-step 里 8 条在干净克隆上实跑通过（含 Windows）；`tests/mutations.py` 29/29。
 
 ## 0.12.1 — 2026-07-27

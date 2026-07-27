@@ -188,11 +188,20 @@ jobs:
           sed -i.bak 's/^          //' "$Fi/bin/mv" 2>/dev/null || sed -i '' 's/^          //' "$Fi/bin/mv"
           rm -f "$Fi/bin/mv.bak"
           chmod +x "$Fi/bin/mv"
-          test "$(PATH="$Fi/bin:$PATH" command -v mv)" = "$Fi/bin/mv" \
-            || { echo "the mv shim is not on PATH - this test would measure nothing"; exit 1; }
+          # Assign PATH in the shell, not as a prefix on the command: bash 3.2 (the
+          # macOS runner) does not let a temporary assignment reach a builtin's own
+          # lookup, so `PATH=... command -v mv` still found /bin/mv -- and the guard
+          # below correctly reported that this test would have measured nothing.
+          OLD_PATH=$PATH
+          PATH="$Fi/bin:$PATH"
+          if [ "$(command -v mv)" != "$Fi/bin/mv" ]; then
+            PATH=$OLD_PATH
+            echo "the mv shim is not on PATH - this test would measure nothing"; exit 1
+          fi
           set +e
-          PATH="$Fi/bin:$PATH" CLAUDE_SKILLS_DIR="$Fi/target" ./install.sh -y >"$Fi/out" 2>&1
+          CLAUDE_SKILLS_DIR="$Fi/target" ./install.sh -y >"$Fi/out" 2>&1
           set -e
+          PATH=$OLD_PATH
           grep -qF 'simulated failure' "$Fi/out" || { echo "the injected failure never fired"; exit 1; }
           test -f "$Fi/target/tdd/SKILL.md" || { echo "a failed swap destroyed the installed skill"; exit 1; }
           test "$(find "$Fi/target" -name SKILL.md | wc -l)" -eq 9 || { echo "a failed swap lost a skill"; exit 1; }
