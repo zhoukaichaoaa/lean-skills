@@ -96,6 +96,10 @@ def bump_a_word_count():
     io.open(p, 'w', encoding='utf-8', newline='').write(t)
 
 
+SPLIT_GOOD = "  IFS='\n'\n  for name in $(for d in"
+
+SPLIT_BAD = "  IFS=' '\n  for name in $(for d in"
+
 CASES = [
     # (label, leg, mutation)
     ('parity: continue-on-error hides a step', 'par', lambda: edit(
@@ -136,6 +140,14 @@ CASES = [
     ('installer: leading blank accepted as absolute', 'sh', lambda: edit(
         'install.sh', GUARD_GOOD, GUARD_BAD)),
     ('installer: install.ps1 flattened to LF', 'sh', lambda: drop_crlf('install.ps1')),
+    ('installer: ps1 refusals go back to exit 1', 'meta', lambda: edit(
+        'install.ps1', 'function Deny($msg, $code = 2) {', 'function Deny($msg, $code = 1) {')),
+    # split on spaces again, which is what made a directory called
+    # "two words" impossible to uninstall
+    ('installer: a space-named skill breaks uninstall', 'sh', lambda: edit(
+        'install.sh', SPLIT_GOOD, SPLIT_BAD)),
+    ('manifest: the marketplace pin goes stale', 'meta', lambda: edit(
+        '.claude-plugin/marketplace.json', '"ref": "v', '"ref": "vX')),
     ('repo: a skill companion file deleted', 'sh',
      lambda: os.remove(os.path.join(work, 'skills/tdd/mocking.md'))),
 

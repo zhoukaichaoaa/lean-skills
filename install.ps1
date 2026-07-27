@@ -18,12 +18,28 @@ Remove this collection's skills from the target.
 .\install.ps1 -Yes -Adopt
 #>
 [CmdletBinding()]
-param([switch]$Yes, [switch]$Adopt, [switch]$Uninstall)
+param(
+  [switch]$Yes, [switch]$Adopt, [switch]$Uninstall,
+  [Parameter(ValueFromRemainingArguments = $true)] $Rest
+)
+if ($Rest) {
+  [Console]::Error.WriteLine("unknown option: $($Rest -join ' ') (try Get-Help .\install.ps1)")
+  exit 2
+}
 
 $ErrorActionPreference = 'Stop'
 
+# Exit codes are a contract, and it is the same contract as install.sh:
+#   0  did what was asked        2  refused (bad target, unknown option)
+#   1  environment problem       3  finished, but kept something it cannot claim
+# `throw` alone always exits 1, so refusals go through this instead.
+function Deny($msg, $code = 2) {
+  [Console]::Error.WriteLine($msg)
+  exit $code
+}
+
 $src = Join-Path $PSScriptRoot 'skills'
-if (-not (Test-Path -LiteralPath $src)) { throw "skills/ not found next to this script" }
+if (-not (Test-Path -LiteralPath $src)) { Deny "skills/ not found next to this script" 1 }
 $srcAbs = ([IO.Path]::GetFullPath($src)).TrimEnd('\')
 
 # Snapshot the source list before touching the target: if anything ever lands
@@ -34,9 +50,9 @@ $srcDirs = @(Get-ChildItem -Directory -LiteralPath $srcAbs)
 # the caller did not mean. (Windows drops empty environment variables outright,
 # so the set-but-empty case install.sh guards against cannot arise here.)
 if ($env:CLAUDE_SKILLS_DIR) {
-  if (-not $env:CLAUDE_SKILLS_DIR.Trim()) { throw "CLAUDE_SKILLS_DIR is blank" }
+  if (-not $env:CLAUDE_SKILLS_DIR.Trim()) { Deny "CLAUDE_SKILLS_DIR is set but blank - unset it for the default, or give it a path" }
   if (-not [IO.Path]::IsPathRooted($env:CLAUDE_SKILLS_DIR)) {
-    throw "CLAUDE_SKILLS_DIR must be an absolute path (got: '$env:CLAUDE_SKILLS_DIR')"
+    Deny "CLAUDE_SKILLS_DIR must be an absolute path (got: '$env:CLAUDE_SKILLS_DIR')"
   }
 }
 $dest = if ($env:CLAUDE_SKILLS_DIR) { $env:CLAUDE_SKILLS_DIR } else { Join-Path $HOME '.claude\skills' }
@@ -64,7 +80,7 @@ function Undo-Created {
     }
   }
 }
-function Deny-Target { Undo-Created; throw "refusing: target $destAbs is the source (or aliases it)" }
+function Deny-Target { Undo-Created; Deny "refusing: target $destAbs is the source (or aliases it)" }
 
 # Walk up from $from looking for $name. Reads traverse junctions and symlinks,
 # so a canary seen from the other side proves aliasing that GetFullPath cannot
@@ -105,7 +121,7 @@ try {
   [IO.File]::WriteAllText((Join-Path $destAbs $canary), '')
   $aliased = Test-CanarySeenFrom $srcAbs $canary
 } catch {
-  Undo-Created; throw "cannot write to target $destAbs"
+  Undo-Created; Deny "cannot write to target $destAbs" 1
 } finally {
   Remove-Item -Force -LiteralPath (Join-Path $destAbs $canary) -ErrorAction SilentlyContinue
 }

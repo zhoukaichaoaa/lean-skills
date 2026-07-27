@@ -126,6 +126,29 @@ jobs:
           set +e; CLAUDE_SKILLS_DIR="$C" ./install.sh --adopt </dev/null >/dev/null 2>&1; set -e
           grep -qF ZZ-MINE-SENTINEL-ZZ "$C/grill-me/SKILL.md" || { echo "--adopt overwrote without consent"; exit 1; }
 
+          # Exit codes are a contract a caller can branch on, so they have to be the
+          # same on both platforms. install.ps1 used `throw` for every refusal,
+          # which always exits 1 while install.sh exits 2.
+          ec() { set +e; ( "$@" ) >/dev/null 2>&1; printf '%s' "$?"; set -e; }
+          test "$(ec env CLAUDE_SKILLS_DIR=rel/x ./install.sh -y)" = 2       || { echo "relative path should exit 2"; exit 1; }
+          test "$(ec env CLAUDE_SKILLS_DIR=$PWD/skills ./install.sh -y)" = 2 || { echo "target=source should exit 2"; exit 1; }
+          test "$(ec ./install.sh --bogus)" = 2                              || { echo "unknown option should exit 2"; exit 1; }
+          test "$(ec ./install.sh -h)" = 0                                   || { echo "--help should exit 0"; exit 1; }
+          test "$(ec env CLAUDE_SKILLS_DIR=$RUNNER_TEMP/never-made ./install.sh --uninstall)" = 0 \
+            || { echo "uninstall on a missing target should exit 0"; exit 1; }
+
+          # A skill directory whose name contains a space installed fine and could
+          # then never be uninstalled: the name loop split it into two words that
+          # matched nothing, and the real directory stayed for ever.
+          Sp="$RUNNER_TEMP/spacename"; mkdir -p "$Sp"
+          cp -R skills "$Sp/skills"; cp install.sh "$Sp/"
+          mv "$Sp/skills/tdd" "$Sp/skills/two words"
+          CLAUDE_SKILLS_DIR="$Sp/t" "$Sp/install.sh" -y >/dev/null
+          test "$(find "$Sp/t" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 9 || { echo "a space-named skill did not install"; exit 1; }
+          CLAUDE_SKILLS_DIR="$Sp/t" "$Sp/install.sh" --uninstall >/dev/null
+          test -z "$(find "$Sp/t" -mindepth 1 -maxdepth 1 -type d)" \
+            || { echo "uninstall could not remove a space-named skill: $(find "$Sp/t" -mindepth 1 -maxdepth 1 -type d)"; exit 1; }
+
           # a relative target is refused, and writes nothing
           set +e; CLAUDE_SKILLS_DIR=rel/here ./install.sh -y >/dev/null 2>&1; rc=$?; set -e
           test "$rc" -eq 2 || { echo "relative CLAUDE_SKILLS_DIR should exit 2, got $rc"; exit 1; }
@@ -261,12 +284,27 @@ jobs:
             if ($s -ne 9) { throw "expected 9 SKILL.md, got $s" }
             if ($m -ne $srcDirs) { throw "expected $srcDirs markers, got $m" }
           }
+          # Out-of-process, and judged by exit code: a refusal is a contract a
+          # caller can branch on, and it must be the same 2 that install.sh uses.
+          # Catching an exception instead would silently stop testing anything the
+          # moment a refusal became an `exit` rather than a `throw`.
           function Assert-Refused($p, $op) {
-            $threw = $false
             $env:CLAUDE_SKILLS_DIR = $p
-            try { if ($op -eq 'Uninstall') { & .\install.ps1 -Uninstall | Out-Null } else { & .\install.ps1 -Yes | Out-Null } }
-            catch { $threw = $true; if ($_.Exception.Message -notmatch 'refusing:') { throw "wrong error for ${p}: $_" } }
-            if (-not $threw) { throw "guard did not refuse: $p ($op)" }
+            $log = Join-Path $env:RUNNER_TEMP 'refused.txt'
+            # the child is expected to write to stderr; 2>&1 on a native command
+            # wraps each line in a NativeCommandError, which terminates under Stop
+            $prevEAP = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            if ($op -eq 'Uninstall') {
+              & powershell -NoProfile -File .\install.ps1 -Uninstall > $log 2>&1
+            } else {
+              & powershell -NoProfile -File .\install.ps1 -Yes > $log 2>&1
+            }
+            $code = $LASTEXITCODE
+            $ErrorActionPreference = $prevEAP
+            $out = Get-Content -Raw $log -ErrorAction SilentlyContinue
+            if ($code -ne 2) { throw "guard did not refuse ${p} (${op}): exit $code, want 2 -- $out" }
+            if ($out -notmatch 'refusing:') { throw "no refusal message for ${p}: $out" }
             $dirty = git status --porcelain
             if ($dirty) { throw "repo dirty after ${p}: $dirty" }
           }
@@ -398,6 +436,28 @@ jobs:
           }
           if (-not (Test-Path -LiteralPath (Join-Path $F 'worktree') -PathType Leaf)) { throw "destroyed a non-directory at our name" }
 
+          # the same exit-code contract as install.sh - a caller cannot branch on
+          # "it refused" if the two platforms answer differently
+          # these calls are supposed to fail; suspend Stop so a native command's
+          # stderr does not become a terminating NativeCommandError
+          function Get-Exit($block) {
+            $prev = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            & $block *> $null
+            $code = $LASTEXITCODE
+            $ErrorActionPreference = $prev
+            return $code
+          }
+          $env:CLAUDE_SKILLS_DIR = 'rel\x'
+          if ((Get-Exit { & powershell -NoProfile -File .\install.ps1 -Yes }) -ne 2) { throw "relative path should exit 2" }
+          $env:CLAUDE_SKILLS_DIR = (Join-Path (Get-Location) 'skills')
+          if ((Get-Exit { & powershell -NoProfile -File .\install.ps1 -Yes }) -ne 2) { throw "target=source should exit 2" }
+          $env:CLAUDE_SKILLS_DIR = $null
+          if ((Get-Exit { & powershell -NoProfile -File .\install.ps1 -Bogus }) -ne 2) { throw "unknown option should exit 2" }
+          $env:CLAUDE_SKILLS_DIR = Join-Path $env:RUNNER_TEMP 'never-made'
+          if ((Get-Exit { & powershell -NoProfile -File .\install.ps1 -Uninstall }) -ne 0) { throw "uninstall on a missing target should exit 0" }
+          $env:CLAUDE_SKILLS_DIR = $null
+
           # A failed swap must not destroy the installed skill. A function shadows
           # a cmdlet, so a fake Move-Item intercepts the script's calls; dot-source
           # install.ps1 in a child process because its `exit` would end this one.
@@ -440,9 +500,9 @@ jobs:
 
           # a relative target is refused and writes nothing
           $env:CLAUDE_SKILLS_DIR = 'rel-here'
-          $threw = $false
-          try { & .\install.ps1 -Yes | Out-Null } catch { $threw = $true }
-          if (-not $threw) { throw "relative CLAUDE_SKILLS_DIR was accepted" }
+          if ((Get-Exit { & powershell -NoProfile -File .\install.ps1 -Yes }) -ne 2) {
+            throw "relative CLAUDE_SKILLS_DIR was accepted"
+          }
           if (Test-Path -LiteralPath (Join-Path $repo 'rel-here')) { throw "wrote into a relative path" }
 
           # the script must parse, including branches this run never enters
@@ -504,6 +564,13 @@ jobs:
           src = p0.get('source')
           url = src if isinstance(src, str) else (src or {}).get('url', '')
           assert 'zhoukaichaoaa/lean-skills' in url, f'marketplace points somewhere else: {url}'
+          # Pin the plugin to the tag being released, not to whatever main holds:
+          # `source` supports `ref` (branch or tag) and `sha`. Tags here are
+          # immutable by rule, so a ref pin is as reproducible as a sha and does
+          # not need the commit to exist before the file that names it.
+          ref = (src or {}).get('ref') if isinstance(src, dict) else None
+          assert ref == 'v' + plugin['version'], \
+              f'marketplace pins {ref!r}, but this release is v{plugin["version"]}'
           assert plugin['version'] == p0['version'] == mk['metadata']['version'], 'version drift'
           ver = plugin['version']
           # a `## ` heading, not a mention: renaming the heading to

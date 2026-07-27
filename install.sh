@@ -179,7 +179,13 @@ retired='code-review'
 if [ "$mode" = uninstall ]; then
   removed=0
   spared=0
+  # IFS=newline, not the default: a directory called "two words" would otherwise
+  # be split into two names that match nothing, and the real one is never removed.
+  old_ifs=${IFS-}
+  IFS='
+'
   for name in $(for d in "$src"/*/; do basename "$d"; done; printf '%s\n' "$retired"); do
+    IFS=$old_ifs
     [ -e "$dest_abs/$name" ] || continue
     if is_ours "$dest_abs/$name" || [ "$adopt" -eq 1 ]; then
       rm -rf "${dest_abs:?}/$name"
@@ -189,7 +195,10 @@ if [ "$mode" = uninstall ]; then
       echo "  kept      $name (no ownership marker)"
       spared=$((spared + 1))
     fi
+    IFS='
+'
   done
+  IFS=${old_ifs-}
   echo
   echo "$removed removed from $dest_abs, $spared kept."
   if [ "$spared" -gt 0 ]; then
@@ -266,7 +275,11 @@ for dir in "$src"/*/; do
 done
 
 # Retire what we no longer ship.
+old_ifs=${IFS-}
+IFS='
+'
 for name in $retired; do
+  IFS=$old_ifs
   [ -e "$dest_abs/$name" ] || continue
   if is_ours "$dest_abs/$name" || [ "$adopt" -eq 1 ]; then
     rm -rf "${dest_abs:?}/$name"
@@ -275,7 +288,10 @@ for name in $retired; do
     echo "  kept      $name (retired, no ownership marker)"
     kept=$((kept + 1)); unmarked=$((unmarked + 1))
   fi
+  IFS='
+'
 done
+IFS=${old_ifs-}
 
 echo
 echo "$installed installed, $kept kept -> $dest_abs"
