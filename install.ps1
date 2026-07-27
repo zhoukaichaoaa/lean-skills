@@ -115,6 +115,15 @@ if ($aliased) { Deny-Target }
 # Uninstall removes only directories that have it, so a skill of your own that
 # happens to share a name with one of ours survives.
 $marker = '.lean-skills'
+# Claude Code loads every directory under the skills root, so a scratch directory
+# left behind by an interrupted run would be loaded as a skill of its own.
+function Remove-Scratch {
+  if (-not $script:destAbs) { return }
+  foreach ($n in @(".lean-skills-staging-$PID", ".lean-skills-outgoing-$PID")) {
+    $s = Join-Path $script:destAbs $n
+    if (Test-Path -LiteralPath $s) { Remove-Item -Recurse -Force -LiteralPath $s -ErrorAction SilentlyContinue }
+  }
+}
 $markerLine = 'installed by lean-skills; uninstall removes only directories carrying this file'
 
 # Skills this collection used to ship. They are gone from skills/, so the loops
@@ -126,8 +135,14 @@ function Test-Ours($dir) {
   $f = Join-Path $dir $marker
   if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { return $false }
   $first = @(Get-Content -LiteralPath $f -TotalCount 1 -ErrorAction SilentlyContinue)
-  return ($first.Count -gt 0 -and $first[0] -eq $markerLine)
+  # -ceq, not -eq: PowerShell's -eq ignores case, so an all-caps marker counted
+  # as ours here while install.sh rejected it. The two must agree byte for byte.
+  return ($first.Count -gt 0 -and $first[0] -ceq $markerLine)
 }
+
+# Everything below can leave scratch directories behind if interrupted. `exit`
+# inside a try still runs the finally, and keeps its own exit code.
+try {
 
 if ($Uninstall) {
   $removed = 0
@@ -189,8 +204,13 @@ foreach ($dir in $srcDirs) {
   if (Test-Path -LiteralPath $staging) { Remove-Item -Recurse -Force -LiteralPath $staging }
   Copy-Item -Recurse -LiteralPath $dir.FullName -Destination $staging
   [IO.File]::WriteAllText((Join-Path $staging $marker), "$markerLine`r`n")
-  if (Test-Path -LiteralPath $target) { Remove-Item -Recurse -Force -LiteralPath $target }
+  # Move the old one aside instead of deleting it first, so the window between
+  # the two contains a rename rather than an absence.
+  $outgoing = Join-Path $destAbs ".lean-skills-outgoing-$PID"
+  if (Test-Path -LiteralPath $outgoing) { Remove-Item -Recurse -Force -LiteralPath $outgoing }
+  if (Test-Path -LiteralPath $target) { Move-Item -LiteralPath $target -Destination $outgoing }
   Move-Item -LiteralPath $staging -Destination $target
+  if (Test-Path -LiteralPath $outgoing) { Remove-Item -Recurse -Force -LiteralPath $outgoing }
   Write-Host "  installed $($dir.Name)"
   $installed++
 }
@@ -224,3 +244,5 @@ Write-Host ""
 Write-Host "Resident (model-invoked): verification-before-completion, receiving-code-review,"
 Write-Host "                          diagnosing-bugs, spec-review, resolving-merge-conflicts"
 Write-Host "Manual (user-invoked):    grill-me, implement, tdd, worktree"
+
+} finally { Remove-Scratch }

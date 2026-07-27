@@ -1,5 +1,71 @@
 # Changelog
 
+## 0.11.0 — 2026-07-27
+
+三份独立第三方审计并行（技能逐命令复现 / CI 变异测试 / 声明对账），每条发现先自己复现再改。**68 个变异里 36 个曾经存活**，这一版把它们关掉。
+
+**技能：塌陷的第三种形状**
+
+前两种都是"命令不报错，只是安静地做了更小或更错的事"。这一种相反 —— **命令响亮地失败，但报错指错了原因，而最顺手的修复恰恰造成伤害**：
+
+- rebase 冲突解决后，`git rebase --continue` 报 *"You must edit all merge conflicts and then mark them as resolved using git add"*，而 `git diff --name-only --diff-filter=U` 是空的。真正的原因是第 4 步刚从索引里救出来的用户文件现在处于未暂存状态。视野里唯一的未暂存路径就是它，于是 `git add user.txt` —— **rebase 把整个技能要保护的东西提交了进去**。实测 merge / cherry-pick / revert 三个都 exit 0 且用户工作完好，只有 rebase 中招。改为 rebase 分支先 `git stash push -- <那些路径>`，`--continue` 之后 `git stash pop`。
+
+**其余技能修正（全部先复现）**
+
+- **操作表的分支不互斥。** `git rebase -r` 重建 merge 冲突时，`MERGE_HEAD` 与 `rebase-merge/` **同时存在**。按表格阅读顺序命中第一行，边界取到的是 rebase 刚建的那个提交（实测 `0a20cd2` vs 真值 `7331b17`），收尾命令 `git merge --continue` **exit 0、建了提交、rebase 原地不动**。表格现在明写自上而下读、命中第一行即停，rebase 行排在 merge 行之前。
+- **`git merge-base` 也会塌成第一个。** 交叉合并（团队反复把 main 合进特性分支就会产生）有多个 merge base，`merge-base` 打印其中一个、exit 0。实测两个 base 算出的"操作带来的文件"清单完全不同（`a.txt` vs `b.txt`）—— 选错既把操作的文件留在索引里，又把用户的文件踢出去。改用 `merge-base --all` 并对全部 base 取并集。
+- **第 9 步的取证命令在两个路径以上时匹配不到任何东西。** 模板把所有路径塞进**一个**带引号的 pathspec，成了一个含空格的单一 pathspec：空输出、exit 0，而同一段自己写着"空结果读起来就像全被提交了"。重命名场景强制触发（第 3 步要求新旧两个路径都列上）。改为每个路径一个 `:(top)` 参数。
+- **`git log --name-only` 对 merge 提交一个文件都不打印。** 被卷进 merge 提交的用户文件在一份看起来完整的清单里完全隐形。`git rebase -r` 也产生 merge 提交，所以这条对 rebase 同样适用。加 `--diff-merges=first-parent`。
+- **`core.quotePath=false` 管不了含空格的路径。** `--porcelain` 对任何含空格/引号/反斜杠的路径无条件加 C 引号，`core.quotePath` 只管非 ASCII。粘回去两个方向都错：`restore --staged` 整条被拒（该救的文件留在索引里），第 9 步静默匹配为空（读成"被提交了"）。改用 `--porcelain -z`。
+- 第 3 步"仅工作区改动的文件不在索引里"是**错的** —— 它们是 tracked 的，索引里有 HEAD 版本。结论方向没错，但它教给读者一个错误的索引模型，而分类正建立在这个模型上。
+
+**安装器：两个平台对同一份文件给出相反答案**
+
+`install.sh` 用 `head -n 1 | grep -qF`（**子串**、大小写敏感），`install.ps1` 用 `-eq`（**全等**、大小写**不**敏感）。实测同一个 `.lean-skills`：
+
+| 首行 | install.sh | install.ps1 |
+|---|---|---|
+| 精确 | 认领 | 认领 |
+| 全大写 | 保留 | **认领** |
+| 前面加 `# ` | **认领** | 保留 |
+| 后面加一句 | **认领** | 保留 |
+
+后果：用户自己写的 `.lean-skills` 只要引用了这句话，`install.sh --uninstall` 就 `rm -rf` 掉整个目录。两边统一为**首行全等、大小写敏感**（容忍尾部 CR），双平台实测四种输入结果一致。
+
+**安装器：中断会留下会被当成技能加载的目录**
+
+原来是 `rm -rf` 目标然后 `mv`，两步之间技能**根本不存在**；全脚本 `trap` 数量为 0，孤儿 staging 目录再跑一次 install 和一次完整 uninstall 都清不掉，而 Claude Code 会把它当成一个名叫 `.lean-skills-staging-1352` 的技能加载。改为先把旧目录改名挪开、换上新的、再删旧的（窗口里是一次 rename 而不是空缺），并加 `trap cleanup EXIT INT TERM HUP` / PowerShell 的 `try…finally`。
+
+**CI：两条哑弹**
+
+- `test -s A && test -s B` 在 `set -e` 下**左侧是豁免的**（实测继续执行）—— "代码块抽取结果为空"这件事永远不会让 CI 变红。拆成两条。
+- "退役错误不许回来"的循环里第二个条件 `! grep -qF 'Never fall back to @{upstream}'` **恒假**，因为上一行刚断言过那句话必须存在。于是把 0.9.0 修掉的 `@{upstream}` bug 原样写回代码块，四个 step 全绿。改为只在代码块内查禁用命令。
+
+**CI：`platform parity` 守卫的四个绕过口**
+
+它只读 `jobs.install` 每个 step 的 `if:` 字符串，于是：给任意 step 加 `continue-on-error: true`（永远不会让 job 红）、把 `macos-latest` 从 matrix 删掉或 `exclude` 掉（守卫照样打印"这些也在 macOS 上跑"，而 macOS 一个 step 都没跑）、新增一个 job 装满 Linux-only step、或者 `if:` 不动而在 body 第一行 `[ "$(uname)" = Darwin ] && exit 0`。四种全部堵上，含"matrix 必须是三个平台且无 exclude"这条它自己的前提。
+
+**CI：其余覆盖空洞**
+
+退役名在 **uninstall** 路径的清理（两个平台都没测，正好放跑了"`code-review` 顶掉内置命令"这个注释里点名要防的场景）；`--uninstall --adopt` 的成功路径（只有 Windows 有）；"覆盖已属于我们的目录前要询问"（此前的用例用的是无标记目录，会在更早的分支 continue 掉，根本走不到 prompt）；标记语义的三种变体；`install.ps1` 的 CRLF（`.gitattributes` 要求，但只有 `install.sh` 有检查）；`tdd/tests.md`、`mocking.md` 必须存在；`plugin.json` 与 `marketplace.json` 的 name 一致、source URL 指向本仓库；blurb 左边界（`19 skills, 5 resident` 含子串 `9 skills, 5 resident`，此前能过）；CHANGELOG 版本号必须是 `## ` 标题（改成 `## Unreleased (would have been …)` 会连带关掉 NOTICE 覆盖检查）；path-printing 配方由"至少 6 条"改为**精确 10 条**（`-ge 6` 下这个技能的四条核心配方可以全删而 CI 全绿）；代码块抽取不再只认 ```` ```bash ````（改标 ```` ```sh ```` 就能把一条配方从所有检查里摘出去）。
+
+**另外两条我自己写的同型 bug**
+
+- `grep -q $'\r'` 在 Git Bash 下**永远不匹配**（MSYS 把 CR 当行尾剥掉）—— 也就是说 `install.sh` 的 CRLF 检查在本机是空转、只在 CI 里活着，同一条断言在写它的地方和跑它的地方行为不同。改走 `od -c` + `grep -qF '\r'`（无管道，避免 SIGPIPE）。
+- CHANGELOG 版本覆盖循环用 `v.split('.')[1] >= '8'` 做字符串比较，`'10' >= '8'` 为假 —— 从 0.10.0 起这条检查会静默失效。改为整数元组比较。
+
+**文档：对自己流程的自述**
+
+三条破绽全在这里，归属与技术事实两块审计逐条实测通过：
+
+- 「八条 CI 腿逐条实跑通过」—— CI 有 **9** 条 run-step，这个数字是 0.9.1 留下的。改为"9 条里 8 条本地跑过，`plugin validate` 需要 npm 只在 CI 跑"。
+- 「发布清单从 0.9.1 的变更记录里**搬**到 README」—— 两处都错：完整清单从来不在任何版本条目里（它是本文件末尾的附录），而且没被搬走，旧的那份仍在、仍写着 `wc -w`。本版真的处理掉，README 是唯一一份。
+- 「0.9.0 声称补了逐文件条目，实际**一条都没补**」—— 假的，它补了 0.8.1 和 0.9.0 两条，缺的是 0.8.0 和 0.8.2（正是同一条目下面自己列出的缺口）。**同一条 CHANGELOG 里两句自相矛盾，而且是在指责别人虚报时自己虚报。**
+- README 把 `resolving-merge-conflicts` 标成"微调"，实际上游 134 词 → 本仓库 2337 词，9 步里 5 步是新写的；`diagnosing-bugs` 同样标错。改为"骨架 + 重写"与"扩写"。
+- README 说"CI 会重算每一个箭头"，实际只重算 4 个右侧值；`plugin validate` 写的命令与 CI 实跑的两条不是同一条；NOTICE 的 `CLAUDE.md`/`AGENTS.md` 一格自 0.7.0 起为假；`skills/tdd/{tests,mocking}.md` 工作区是 CRLF 而 `.gitattributes` 要求 LF。全部改正。
+
+**验证**：CI 的 9 条 run-step 里 8 条在干净克隆上逐条实跑通过（含 Windows）；第 9 条 `plugin validate` 需要 npm，只在 CI 跑。本轮新增与修复的断言做了 **18 项变异测试，18 项全部确认会红**。标记语义的四种输入在两个平台各跑一遍，结果一致。
+
 ## 0.10.0 — 2026-07-27
 
 自审 + 两份第三方审计（针对 v0.9.2）。这一轮的主题是：**把"塌陷"写进技能本体，把"记得做"写成 CI 断言。**
@@ -25,15 +91,15 @@
 
 **NOTICE：声明与事实对账**
 
-0.9.0 的 CHANGELOG 声称"补上 0.8.0–0.9.0 的逐文件条目"与"四行词数统一口径"—— 实际一条都没补，口径也没统一。本版真做了：
+0.9.0 的 CHANGELOG 声称"补上 0.8.0–0.9.0 的逐文件条目"与"四行词数统一口径"。前者只补了 0.8.1 与 0.9.0 两条，缺 0.8.0 与 0.8.2；后者没做（四个箭头左侧是 `LC_ALL=C wc -w`、右侧是空白分隔计数，每个箭头两端各一种口径）。本版补齐：
 
 - 词数口径改为 **locale 无关的空白分隔计数**（`awk '{n+=NF}'`）并写明理由 —— `wc -w` 对同一份 `worktree/SKILL.md` 在 `LC_ALL=C` 下是 851、UTF-8 locale 下是 877，BSD 与 GNU 又各不相同，写进文档根本无法复核。八个数字全部重算：上游 580/913/1069/1104（取自文件顶部钉住的那两个提交），本仓库 442/428/877/1294，历史峰值从 1581 改正为 **1642**（已从 `v0.6.0` 标签直接重算验证）。
 - 补齐 0.8.0 的七行逐文件条目，以及 0.8.2 / 0.9.2 / 0.10.0；0.9.1 未改动任何衍生文件，也明写出来，不留缺口。
 - CI 新增：每一个箭头都要被重算比对（多出一个无人校验的箭头就红），且 CHANGELOG 里发过的每个 0.8+ 版本必须在 NOTICE 里有交代 —— 这条断言当场就报出了 0.8.0/0.8.2/0.9.1 三个缺口。
 
-**发布流程**：发布清单从 0.9.1 的变更记录里搬到 [README 的「维护」一节](README.md#发布清单) —— 一份活的清单埋在不该再改的历史条目里，它就会过期（它当时还写着用 `wc -w` 重算词数）。同时新增一条：新增的断言必须做变异测试。
+**发布流程**：README 的「维护」一节新增发布清单，并加一条：新增的断言必须做变异测试。（本文件末尾那份旧附录当时**没有**被移走，仍写着 `wc -w`——0.11.0 才真的处理掉。）
 
-**验证**：八条 CI 腿（含 Windows）在干净克隆上逐条实跑通过；本轮新增的断言做了 12 项变异测试，全部确认会红。
+**验证**：CI 的 9 条 run-step 里 8 条在干净克隆上逐条实跑通过（含 Windows）；第 9 条 `plugin validate` 需要 `npm install -g`，只在 CI 里跑。本轮新增的断言做了 12 项变异测试，全部确认会红。
 
 ## 0.9.2 — 2026-07-27
 
@@ -288,6 +354,7 @@ CI 的 git 配方回归新增一例：推一个 `dev` 分支到远端后，断�
 
 - 首发：9 技能（5 常驻 / 4 手动），双安装脚本，DOCTRINE / NOTICE / 双上游 MIT 归属
 
+
 ---
 
-**发布清单**：**标签一经推送即不可变**（发版前确认 `git ls-remote --tags origin` 里没有该标签；任何修复走新版本号，绝不 `tag -f`）→ **任何改动都要 Windows 与 macOS 双平台落地并各自有断言**（`install.sh` 与 `install.ps1` 同时改；CI 步骤默认 `if: runner.os != 'Windows'`，单平台步骤须在 `platform parity` 的豁免表里写明理由）→ 改 manifests 版本号 → **更新 NOTICE 的逐文件行并用 `wc -w` 重算词数** → 更新本文件 → 本地把 CI 的每条腿在干净克隆上原样跑一遍 → commit & push → CI 绿 → `git tag vX.Y.Z && git push --tags` → `gh release create` → 核对 GitHub description → `claude plugin validate --strict .`
+发布清单在 [README 的「维护」一节](README.md#发布清单)，那是唯一的一份。（0.10.0 之前它是本文件末尾的一段附录；0.10.0 的记录说它"从 0.9.1 的变更记录里搬走"，两点都不对——它从来不在任何一个版本条目里，而且直到 0.11.0 才真的移走。）

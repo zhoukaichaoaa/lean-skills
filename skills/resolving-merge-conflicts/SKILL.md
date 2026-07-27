@@ -8,15 +8,18 @@ description: Use when git reports conflicts during a merge, rebase, cherry-pick,
 Run every command below and **read what it printed**. Two shapes account for every silent failure this skill has ever had, and both produce output that looks correct:
 
 - **Collapse to nothing.** A command that prints nothing still succeeds inside `$(...)`, and the outer command then runs against a shorter, plausible argument list. Never chain one into the next; run it, read the value, use the value.
-- **Collapse to the first.** Several things git will hand you are *not single-valued*, and the convenient accessor quietly returns element one: `MERGE_HEAD` can hold several commits while `git rev-parse MERGE_HEAD` prints one; `<commit>^` is always parent 1 even when the operation named a different mainline; `refs/remotes/origin/HEAD` is whatever the default branch was on the day you cloned. Each returns a valid SHA with exit 0. Check the arity before you trust the value.
+- **Collapse to the first.** Several things git will hand you are *not single-valued*, and the convenient accessor quietly returns element one: `git merge-base` prints one base while criss-cross history has several, and the two disagree about which files the operation brings; `MERGE_HEAD` can hold several commits while `git rev-parse MERGE_HEAD` prints one; `<commit>^` is always parent 1 even when the operation named a different mainline; `refs/remotes/origin/HEAD` is whatever the default branch was on the day you cloned. Each returns a valid SHA with exit 0. Check the arity before you trust the value.
+- **The error names the wrong cause.** Once, at step 8, git refuses and its message describes a state you can see is not true. Do not act on the message's suggestion: it points at the user's rescued work, and taking it commits exactly what this skill exists to protect. Step 8 says what to do instead.
 
 1. **Identify the operation and its incoming side.** Which one is in progress decides both how it ends and what counts as "its" changes. Look in `$(git rev-parse --git-dir)` — `--git-dir`, not `--git-common-dir`: inside a linked worktree the conflict state lives in that worktree's own directory.
 
+   **Read the table top to bottom and stop at the first row that matches** — the rows are not mutually exclusive. `git rebase -r` (`--rebase-merges`) replays a merge commit, and while that merge is conflicted **both** `MERGE_HEAD` and `rebase-merge/` are present. Taking the merge row there gives a boundary that is the commit the rebase just made, and a finishing command that commits successfully and leaves the rebase exactly where it was — exit 0, a new commit, nothing advanced.
+
    | Present | Operation | Incoming ref | Finish with | Where the operation started |
    |---|---|---|---|---|
-   | `MERGE_HEAD` | merge (including `pull`) | every line of that file | `git commit` or `git merge --continue` | `git rev-parse HEAD` |
    | `rebase-apply/` **with** `applying` | `git am` | — | `git am --continue` | not covered below; resolve the conflict and stop |
-   | `rebase-merge/` or `rebase-apply/` | rebase | `REBASE_HEAD` | `git rebase --continue` | `cat "$G/rebase-merge/onto"` (or `rebase-apply/onto`) |
+   | `rebase-merge/` or `rebase-apply/` | rebase (including `-r`) | `REBASE_HEAD` | `git rebase --continue` | `cat "$G/rebase-merge/onto"` (or `rebase-apply/onto`) |
+   | `MERGE_HEAD` | merge (including `pull`) | every line of that file | `git commit` or `git merge --continue` | `git rev-parse HEAD` |
    | `CHERRY_PICK_HEAD` | cherry-pick | `CHERRY_PICK_HEAD` | `git cherry-pick --continue` | `cat "$G/sequencer/head"` if it exists, else `git rev-parse HEAD` |
    | `REVERT_HEAD` | revert | `REVERT_HEAD` | `git revert --continue` | same as cherry-pick |
 
@@ -33,13 +36,15 @@ Run every command below and **read what it printed**. Two shapes account for eve
 2. **Work out what the operation brings.** For a merge, that is everything from the merge base to the incoming tip — **not** `HEAD..MERGE_HEAD`, which also lists every file your own side changed since the base:
 
    ```bash
-   cat "$G/MERGE_HEAD"                                       # one line per incoming head
+   cat "$G/MERGE_HEAD"                                # one line per incoming head
    # for each of them, in turn:
-   git -c core.quotePath=false merge-base HEAD <that head>   # read the SHA it prints
+   git merge-base --all HEAD <that head>              # read every SHA it prints
    git -c core.quotePath=false diff --name-status -M <that literal SHA> <that head>
    ```
 
-   With more than one incoming head, take the **union** of the results — a file only b2 brings is still the operation's, and treating it as the user's is how the second parent's work gets thrown away.
+   `--all`, not plain `merge-base`: when the two sides have merged each other before — a team that repeatedly merges `main` into a feature branch produces exactly this — there is more than one merge base, and `merge-base` prints one of them with exit 0. The bases disagree about which files the operation brings, so the wrong one both leaves a file of the operation's in the index and unstages a file of the user's.
+
+   Take the **union** across every base and every incoming head. A file that only one of them brings is still the operation's, and treating it as the user's is how the second parent's work gets thrown away.
 
    **No SHA printed?** The two sides share no history (`--allow-unrelated-histories`, a vendored subtree, a rewritten upstream). Do not carry on with an empty base — the diff would silently compare against your working tree and invert everything below. Diff from the empty tree instead, which means "the incoming side brings all of its content":
 
@@ -70,8 +75,10 @@ Run every command below and **read what it printed**. Two shapes account for eve
    Sort what is left into three lists; step 4 treats them differently:
 
    - **Staged, not brought by the operation** — the user's, and *in the index*. For a rename, both the old and the new path belong here.
-   - **Working-tree only** — first column blank in porcelain (` M`, ` D`). Theirs, but not in the index; nothing to undo.
+   - **Working-tree only** — first column blank in porcelain (` M`, ` D`). Tracked, so git knows them, but the index still holds the `HEAD` version; there is nothing to unstage.
    - **Untracked** (`??`). Theirs, and git does not know them at all.
+
+   **Paths with a space are quoted no matter what.** `--porcelain` wraps any path containing a space, a quote or a backslash in C quotes, and `core.quotePath` does not turn that off — it governs non-ASCII bytes only. Pasting `"my report.txt"` back fails two different ways: `git restore --staged` rejects the whole command, and step 9's `status` silently matches nothing. Read such paths with `git status --porcelain -z`, which separates records with NUL and quotes nothing.
 
 4. **Take the user's staged work out of the index before you resolve anything.** This is what makes the promise in step 8 achievable:
 
@@ -79,7 +86,7 @@ Run every command below and **read what it printed**. Two shapes account for eve
    git restore --staged -- <only the staged-not-brought list>   # older git: git reset HEAD -- <paths>
    ```
 
-   **Only that first list.** Untracked and working-tree-only paths are not in the index, and passing one makes git reject the *whole* command, so the staged files you meant to rescue stay staged and get committed anyway.
+   **Only that first list.** An untracked path is not in the index, and passing one makes git reject the *whole* command — the staged files you meant to rescue stay staged and get committed anyway. (A working-tree-only path is harmless to pass, but it has nothing to unstage, so listing it only obscures what you did.)
 
    Confirm it took: `git -c core.quotePath=false diff --cached --name-status -M HEAD` should now list only what the operation brings. A name you cannot account for from any of the three lists is a signal, not noise — usually the other half of a rename. Tell the user what you unstaged and why. If a file is *both* conflicted and something they were editing, stop and ask; you cannot split that automatically.
 
@@ -91,25 +98,41 @@ Run every command below and **read what it printed**. Two shapes account for eve
 
 7. Discover the project's **automated checks** and run them — typically typecheck, then tests, then format. Fix anything the operation broke.
 
-8. **Finish it.** Stage the conflicted files and whatever you edited in step 7, then run the finishing command for this operation from step 1. If rebasing or cherry-picking, repeat from step 1 for each subsequent conflicted commit until git reports the operation complete — the boundary you recorded at the first conflict stays valid for the whole run.
+8. **Finish it.** Stage the conflicted files and whatever you edited in step 7, then run the finishing command for this operation from step 1.
+
+   **Rebase only: park the user's work first.** `git rebase --continue` requires a clean working tree, and the paths you rescued in step 4 are now unstaged modifications. It refuses with *"You must edit all merge conflicts and then mark them as resolved using git add"* — a message about conflicts, while `git diff --name-only --diff-filter=U` prints nothing. The only unstaged path in sight is the user's, so the obvious next move is to `git add` it, and the rebase then commits the very work step 4 rescued. Park it instead:
+
+   ```bash
+   git stash push -- <the paths you unstaged in step 4>
+   git rebase --continue
+   git stash pop
+   ```
+
+   Merge, cherry-pick and revert do not need this — all three finish with the user's modifications sitting in the working tree, exit 0, and commit nothing of theirs.
+
+   If rebasing or cherry-picking, repeat from step 1 for each subsequent conflicted commit until git reports the operation complete — the boundary you recorded at the first conflict stays valid for the whole run.
 
 9. **Prove the user's work survived.** Ask it of the paths themselves, which is exact and operation-agnostic:
 
    ```bash
-   git -c core.quotePath=false status --porcelain -- ':(top)<every path you listed as the user's in step 3>'
+   git -c core.quotePath=false status --porcelain -- ':(top)first-path' ':(top)second-path'
    ```
 
-   Each must still appear. A path that has gone quiet was committed by the operation. The `:(top)` prefix matters: pathspecs resolve against the current directory while step 3 printed them relative to the repository root, so running this from a subdirectory silently matches nothing and reads as "all of it was committed". If step 3's list was empty, say so — there was no in-flight work to protect, and an empty check proves nothing.
+   **One `:(top)` argument per path.** Several paths inside a single pair of quotes is *one* pathspec containing spaces; it matches nothing, exits 0, and reads exactly like "all of it was committed". A rename forces this case — step 3 puts both the old and the new path on the list.
+
+   Each must still appear. A path that has gone quiet was committed by the operation. The `:(top)` prefix matters too: pathspecs resolve against the current directory while step 3 printed them relative to the repository root, so running this from a subdirectory silently matches nothing and reads the same wrong way. If step 3's list was empty, say so — there was no in-flight work to protect, and an empty check proves nothing.
 
    Then cross-check against what the operation actually recorded, using the boundary from step 1:
 
    ```bash
-   git -c core.quotePath=false log --name-only --oneline <boundary>..HEAD   # rebase, cherry-pick, revert
+   git -c core.quotePath=false log --name-only --diff-merges=first-parent --oneline <boundary>..HEAD
    git log -1 --format=%P HEAD                      # merge: list the parents, then diff against each
    git -c core.quotePath=false diff --name-only HEAD^<n> HEAD               #   an octopus merge has more than two
    ```
 
-   `git show HEAD` is not enough: a multi-commit rebase buries the file in an earlier commit, and on a merge commit `--stat` alone hides it.
+   `--diff-merges=first-parent` is what makes a merge commit report anything at all: by default `git log` shows no file names for a merge, so a path swept into one is invisible in a listing that otherwise looks complete. `git rebase -r` produces merge commits, so this matters on the rebase line too, not only for merges.
+
+   `git show HEAD` is not enough either: a multi-commit rebase buries the file in an earlier commit, and on a merge commit `--stat` alone hides it.
 
 ## Completion criterion
 
@@ -117,4 +140,4 @@ Long-form `git status` — not `--porcelain`, which stays silent about an operat
 
 ---
 
-_From [mattpocock/skills](https://github.com/mattpocock/skills) `resolving-merge-conflicts` (MIT); heading, completion criterion and this attribution added, the absolute never-abort rule relaxed (aborting is allowed when the operation itself is a mistake), blanket `git add -A` staging removed, per-operation incoming refs and finishing commands added, and the user's in-flight work identified by diffing the index against what the operation brings from the merge base — then actually unstaged, since naming paths at commit time does not keep them out of a merge commit. Rename-aware and quote-safe as of 0.9.0._
+_From [mattpocock/skills](https://github.com/mattpocock/skills) `resolving-merge-conflicts` (MIT); heading, completion criterion and this attribution added, the absolute never-abort rule relaxed (aborting is allowed when the operation itself is a mistake), blanket `git add -A` staging removed, per-operation incoming refs and finishing commands added, and the user's in-flight work identified by diffing the index against what the operation brings from the merge base — then actually unstaged, since naming paths at commit time does not keep them out of a merge commit. Rename-aware and quote-safe as of 0.9.0; operation table given a reading order, `merge-base --all`, per-path pathspecs, first-parent merge listing and the rebase stash step added in 0.11.0._

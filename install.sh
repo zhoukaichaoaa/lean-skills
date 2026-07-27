@@ -128,9 +128,23 @@ fi
 # Uninstall removes only directories that have it, so a skill of your own that
 # happens to share a name with one of ours survives.
 marker=.lean-skills
+# Anything interrupted mid-swap leaves scratch directories behind. Claude Code
+# loads every directory under the skills root, so an orphaned one would show up
+# as a skill named `.lean-skills-staging-1234`.
+cleanup() { [ -n "${dest_abs:-}" ] && rm -rf "$dest_abs/.lean-skills-staging-$$" "$dest_abs/.lean-skills-outgoing-$$"; }
+trap cleanup EXIT INT TERM HUP
 marker_line='installed by lean-skills; uninstall removes only directories carrying this file'
 
-is_ours() { [ -f "$1/$marker" ] && head -n 1 "$1/$marker" 2>/dev/null | grep -qF "$marker_line"; }
+# The whole first line must equal the marker, byte for byte (a trailing CR is
+# tolerated so a file written on Windows still counts). A substring test would
+# claim - and rm -rf - any directory whose marker merely quotes this sentence,
+# and install.ps1 compares for equality, so a looser test here would also make
+# the two platforms disagree about who owns a directory.
+is_ours() {
+  [ -f "$1/$marker" ] || return 1
+  first=$(head -n 1 "$1/$marker" 2>/dev/null | tr -d '\r')
+  [ "$first" = "$marker_line" ]
+}
 
 # Skills this collection used to ship. They are gone from skills/, so the loops
 # below would never look at them, and a stale copy would sit in the target for
@@ -140,7 +154,7 @@ retired='code-review'
 if [ "$mode" = uninstall ]; then
   removed=0
   spared=0
-  for name in $(for d in "$src"/*/; do basename "$d"; done; echo $retired); do
+  for name in $(for d in "$src"/*/; do basename "$d"; done; printf '%s\n' "$retired"); do
     [ -e "$dest_abs/$name" ] || continue
     if is_ours "$dest_abs/$name" || [ "$adopt" -eq 1 ]; then
       rm -rf "${dest_abs:?}/$name"
@@ -211,8 +225,15 @@ for dir in "$src"/*/; do
   rm -rf "$staging"
   cp -R "${dir%/}" "$staging"
   echo "$marker_line" > "$staging/$marker"
-  rm -rf "${dest_abs:?}/$name"
+  # Move the old one aside rather than deleting it first: between the rm and the
+  # mv the skill used to be simply gone, and an interrupt there left the target
+  # with no copy at all. Now the window contains a rename, and whatever survives
+  # is cleaned up by the trap.
+  outgoing=$dest_abs/.lean-skills-outgoing-$$
+  rm -rf "$outgoing"
+  [ -e "$dest_abs/$name" ] && mv "$dest_abs/$name" "$outgoing"
   mv "$staging" "$dest_abs/$name"
+  rm -rf "$outgoing"
   echo "  installed $name"
   installed=$((installed + 1))
 done

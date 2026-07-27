@@ -28,10 +28,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if grep -q $'\r' install.sh; then echo "CRLF found in install.sh"; exit 1; fi
+          # -qF, not a regex: in a BRE `\r` degrades to a literal `r` and matches
+          # any r in od's output. No pipe either -- `grep -q` exits on the first
+          # match and would SIGPIPE od under `set -o pipefail`.
+          has_cr() { grep -qF '\r' <<<"$(od -c < "$1")"; }
+          if has_cr install.sh; then echo "CRLF found in install.sh"; exit 1; fi
+          # .gitattributes pins install.ps1 to CRLF; PowerShell tolerates LF, but
+          # the file must match what the repository declares
+          has_cr install.ps1 || { echo "install.ps1 lost its CRLF endings"; exit 1; }
           test -x install.sh
           sh -n install.sh
           if command -v dash >/dev/null; then dash -n install.sh; fi
+          # files a SKILL.md links to must still be here: SRC_FILES is derived
+          # from the source, so a deleted companion shrinks both sides in step
+          test -f skills/tdd/tests.md && test -f skills/tdd/mocking.md
           SRC_FILES=$(find skills -type f | wc -l)
           SRC_DIRS=$(find skills -mindepth 1 -maxdepth 1 -type d | wc -l)
           SRC_LIST=$(find skills -mindepth 1 -maxdepth 1 | sort)
@@ -127,6 +137,50 @@ jobs:
           CLAUDE_SKILLS_DIR="$K" ./install.sh --uninstall >/dev/null
           test "$(find "$K" -name SKILL.md | wc -l)" -eq 0
           test "$(find "$K" -name .lean-skills | wc -l)" -eq 0
+
+          # a retired name must be cleared on the uninstall path too, or the
+          # directory that shadows the built-in /code-review lives for ever
+          Rt="$RUNNER_TEMP/retired"
+          CLAUDE_SKILLS_DIR="$Rt" ./install.sh -y >/dev/null
+          mkdir -p "$Rt/code-review"; : > "$Rt/code-review/SKILL.md"
+          cp "$Rt/tdd/.lean-skills" "$Rt/code-review/.lean-skills"
+          CLAUDE_SKILLS_DIR="$Rt" ./install.sh --uninstall >/dev/null
+          test ! -e "$Rt/code-review" || { echo "uninstall left a retired skill behind"; exit 1; }
+
+          # --uninstall --adopt must clear a marker-less tree (the ps1 leg tests
+          # this; without it here the contract existed on one platform only)
+          Ua="$RUNNER_TEMP/uadopt"
+          for s in $(ls skills); do mkdir -p "$Ua/$s"; echo ZZ-OLD-SENTINEL-ZZ > "$Ua/$s/SKILL.md"; done
+          CLAUDE_SKILLS_DIR="$Ua" ./install.sh --uninstall --adopt >/dev/null
+          test "$(find "$Ua" -name SKILL.md | wc -l)" -eq 0 || { echo "--uninstall --adopt spared a marker-less tree"; exit 1; }
+
+          # a directory that IS ours still gets a prompt: no -y and no tty must
+          # not overwrite it (the earlier consent case used a marker-less dir,
+          # which is refused earlier and never reaches the prompt)
+          Oc="$RUNNER_TEMP/ours-consent"
+          CLAUDE_SKILLS_DIR="$Oc" ./install.sh -y >/dev/null
+          echo ZZ-MINE-SENTINEL-ZZ > "$Oc/tdd/SKILL.md"
+          CLAUDE_SKILLS_DIR="$Oc" ./install.sh </dev/null >/dev/null 2>&1 || true
+          grep -qF ZZ-MINE-SENTINEL-ZZ "$Oc/tdd/SKILL.md" || { echo "overwrote an owned skill without consent"; exit 1; }
+
+          # the ownership marker is an exact first line, and both installers must
+          # read it the same way -- a substring test claimed (and rm -rf'd) any
+          # directory whose marker merely quoted the sentence
+          Ms="$RUNNER_TEMP/marker-sem"
+          for v in upper prefix suffix; do
+            rm -rf "$Ms"; mkdir -p "$Ms/tdd"; : > "$Ms/tdd/SKILL.md"
+            case $v in
+              upper)  tr 'a-z' 'A-Z' < "$RUNNER_TEMP/skills/tdd/.lean-skills" > "$Ms/tdd/.lean-skills" ;;
+              prefix) { printf '# '; cat "$RUNNER_TEMP/skills/tdd/.lean-skills"; } > "$Ms/tdd/.lean-skills" ;;
+              suffix) sed '1s/$/ -- and more/' "$RUNNER_TEMP/skills/tdd/.lean-skills" > "$Ms/tdd/.lean-skills" ;;
+            esac
+            CLAUDE_SKILLS_DIR="$Ms" ./install.sh --uninstall >/dev/null 2>&1 || true
+            test -f "$Ms/tdd/SKILL.md" || { echo "a $v marker was claimed as ours"; exit 1; }
+          done
+
+          # an interrupted install must not leave a directory Claude Code would
+          # load as a skill of its own
+          test -z "$(find "$RUNNER_TEMP" -maxdepth 3 -name '.lean-skills-outgoing-*')"
 
           # atomic swap kept, and no staging directory left behind
           grep -qF 'mv "$staging" "$dest_abs/$name"' install.sh
@@ -292,8 +346,8 @@ jobs:
           if ($LASTEXITCODE -ne 3) { throw "foreign marker / non-directory should block, got $LASTEXITCODE" }
           if (-not (Get-Content -Raw (Join-Path $F 'implement\SKILL.md')).Contains('ZZ-FOREIGN-SENTINEL-ZZ')) { throw "a foreign marker was accepted as ours" }
           # a sentinel that the shipped text could ever contain is a dead assertion
-          foreach ($s in @('ZZ-FOREIGN-SENTINEL-ZZ','ZZ-USER-SENTINEL-ZZ','ZZ-OLD-SENTINEL-ZZ')) {
-            if (Get-ChildItem skills -Recurse -Filter SKILL.md | Select-String -SimpleMatch $s) {
+          foreach ($s in @('ZZ-FOREIGN-SENTINEL-ZZ','ZZ-USER-SENTINEL-ZZ','ZZ-OLD-SENTINEL-ZZ','ZZ-MINE-SENTINEL-ZZ')) {
+            if (Get-ChildItem skills -Recurse -File | Select-String -SimpleMatch $s) {
               throw "sentinel $s collides with shipped text"
             }
           }
@@ -356,12 +410,23 @@ jobs:
           p0 = mk['plugins'][0]
           total = len(resident) + len(manual)
           blurb = f'{total} skills, {len(resident)} resident'
+          # bounded on the left too: '19 skills, 5 resident' contains the substring
+          # '9 skills, 5 resident' and used to pass
           for d in (plugin['description'], p0['description']):
-              assert blurb in d, (blurb, d)
+              assert re.search(r'(?<!\d)' + re.escape(blurb), d), (blurb, d)
+          # the two manifests must describe the same plugin, from this repository
+          assert plugin['name'] == p0['name'], ('name drift', plugin['name'], p0['name'])
+          src = p0.get('source')
+          url = src if isinstance(src, str) else (src or {}).get('url', '')
+          assert 'zhoukaichaoaa/lean-skills' in url, f'marketplace points somewhere else: {url}'
           assert plugin['version'] == p0['version'] == mk['metadata']['version'], 'version drift'
           ver = plugin['version']
-          assert re.search(r'(?<![\d.])' + re.escape(ver) + r'(?![\d.])',
-                           io.open('CHANGELOG.md', encoding='utf-8').read()), f'CHANGELOG has no {ver} section'
+          # a `## ` heading, not a mention: renaming the heading to
+          # '## Unreleased (would have been 0.11.0)' left the version in the prose
+          # and silently switched off the NOTICE-coverage loop below as well
+          changelog = io.open('CHANGELOG.md', encoding='utf-8').read()
+          assert re.search(r'(?m)^## ' + re.escape(ver) + r'(?![\d.])', changelog), \
+              f'CHANGELOG has no "## {ver}" section'
           # a resident skill must not be advertised on the manual line, or vice versa
           # What the installer prints is the only bucket map most users ever read.
           # Compare it for equality, not membership: a heuristic that only looked
@@ -369,11 +434,16 @@ jobs:
           import re as _re
           for path in ('install.sh', 'install.ps1'):
               blob = io.open(path, encoding='utf-8').read()
-              tail = blob[blob.index('Resident (model-invoked)'):]
-              tail = _re.sub(r'(?m)^\s*(echo|Write-Host)\s*"|"\s*$', '', tail)
-              r_part, _, m_part = tail.partition('Manual (user-invoked):')
-              assert m_part, f'{path}: the manual line is gone'
-              r_part = r_part.partition('Resident (model-invoked):')[2]
+              lines = blob.splitlines()
+              def strip_scaffold(s):
+                  return _re.sub(r'^(echo|Write-Host)\s*', '', s.strip()).strip().strip('"')
+              i_r = [i for i, l in enumerate(lines) if 'Resident (model-invoked):' in l]
+              i_m = [i for i, l in enumerate(lines) if 'Manual (user-invoked):' in l]
+              assert len(i_r) == 1 and len(i_m) == 1, f'{path}: the banner is not printed exactly once'
+              i_r, i_m = i_r[0], i_m[0]
+              assert i_m > i_r, f'{path}: the banner lines are out of order'
+              r_part = ' '.join(strip_scaffold(l) for l in lines[i_r:i_m]).partition('Resident (model-invoked):')[2]
+              m_part = strip_scaffold(lines[i_m]).partition('Manual (user-invoked):')[2]
               got_r = {w for w in _re.split(r'[,\s]+', r_part) if w}
               got_m = {w for w in _re.split(r'[,\s]+', m_part) if w}
               assert got_r == RESIDENT, f'{path}: resident line says {sorted(got_r)}'
@@ -406,7 +476,7 @@ jobs:
           # every shipped version must have said something about what it changed
           # tuple-of-ints, not string order: '10' < '8' lexically, which would have
           # silently stopped checking at 0.10.0
-          for v in re.findall(r'^## (\d+\.\d+\.\d+)', io.open('CHANGELOG.md', encoding='utf-8').read(), re.M):
+          for v in re.findall(r'^## (\d+\.\d+\.\d+)', changelog, re.M):
               if tuple(int(x) for x in v.split('.')) >= (0, 8, 0):
                   assert v in notice, f'NOTICE never mentions {v}, but CHANGELOG ships it'
           print('ok: 9 skills,', len(resident), 'resident,', len(manual), 'manual; installer lists and NOTICE counts agree')
@@ -470,10 +540,15 @@ jobs:
           # Anchors must sit inside a prescriptive code block, not anywhere in the
           # file: a reversed instruction that keeps the literal string nearby
           # would otherwise pass. Extract the fenced bash blocks first.
-          awk '/^ *```bash$/,/^ *```$/' "$M" > "$RUNNER_TEMP/mc-cmds.txt"
-          awk '/^ *```bash$/,/^ *```$/' "$S" > "$RUNNER_TEMP/sr-cmds.txt"
-          test -s "$RUNNER_TEMP/mc-cmds.txt" && test -s "$RUNNER_TEMP/sr-cmds.txt"
-          for want in 'merge-base HEAD <that head>' 'REBASE_HEAD^<n> REBASE_HEAD'                       'CHERRY_PICK_HEAD^<n> CHERRY_PICK_HEAD' 'REVERT_HEAD^<n> REVERT_HEAD'                       'git restore --staged --' 'name-status -M' 'MERGE_HEAD"'                       'hash-object -t tree'; do
+          # any fenced block, whatever it is labelled: relabelling ```bash to ```sh
+          # used to lift a recipe out of every check below
+          awk '/^ *```/{f=!f; next} f' "$M" > "$RUNNER_TEMP/mc-cmds.txt"
+          awk '/^ *```/{f=!f; next} f' "$S" > "$RUNNER_TEMP/sr-cmds.txt"
+          # separate statements: in `A && B`, set -e exempts A, so half of a
+          # combined test can fail without failing the step
+          test -s "$RUNNER_TEMP/mc-cmds.txt"
+          test -s "$RUNNER_TEMP/sr-cmds.txt"
+          for want in 'merge-base --all HEAD <that head>' 'REBASE_HEAD^<n> REBASE_HEAD'                       'CHERRY_PICK_HEAD^<n> CHERRY_PICK_HEAD' 'REVERT_HEAD^<n> REVERT_HEAD'                       'git restore --staged --' 'name-status -M' 'MERGE_HEAD"'                       'hash-object -t tree'; do
             grep -qF "$want" "$RUNNER_TEMP/mc-cmds.txt" || { echo "not prescribed in a code block: $want"; exit 1; }
           done
           for want in 'cat-file -e' 'refs/heads/<default>:refs/remotes/origin/<default>' 'ls-remote --symref'; do
@@ -481,7 +556,11 @@ jobs:
           done
           # every prescribed git command that prints paths must disable octal escaping
           path_cmds=$(grep -E '^ *git .*(--name-only|--name-status|--porcelain)' "$RUNNER_TEMP/mc-cmds.txt" || true)
-          test "$(grep -c . <<<"$path_cmds")" -ge 6 || { echo "the path-printing recipes vanished"; exit 1; }
+          # an exact count, not a floor: with `-ge 6` the four recipes that carry
+          # this skill (index diff, porcelain, the step 9 evidence pair) could all
+          # be deleted and the step stayed green
+          n_path=$(grep -c . <<<"$path_cmds")
+          test "$n_path" -eq 10 || { echo "expected 10 path-printing recipes, found $n_path"; echo "$path_cmds"; exit 1; }
           unquoted=$(grep -vF -- '-c core.quotePath=false' <<<"$path_cmds" || true)
           test -z "$unquoted" || { echo "lost core.quotePath=false:"; echo "$unquoted"; exit 1; }
           # prose-level anchors: these are warnings, not commands, so they live
@@ -492,9 +571,13 @@ jobs:
           for bad in 'diff --name-only HEAD MERGE_HEAD' 'diff --name-status -M HEAD MERGE_HEAD' 'diff --cached --name-only'; do
             if grep -qF "$bad" "$M"; then echo "retired mistake is back in $M: $bad"; exit 1; fi
           done
-          for bad in 'baseRepository' 'merge-base HEAD @{upstream}'; do
-            if grep -qF "$bad" "$S" && ! grep -qF "Never fall back to \`@{upstream}\`" "$S"; then
-              echo "retired mistake is back in $S: $bad"; exit 1
+          # These must not reappear as *instructions*. The guard sentence above
+          # contains `@{upstream}` too, so look only inside the fenced blocks --
+          # the earlier version ANDed in "unless the warning is present", which
+          # the line above had already made unconditionally true, so it never fired.
+          for bad in 'baseRepository' '@{upstream}'; do
+            if grep -qF "$bad" "$RUNNER_TEMP/sr-cmds.txt"; then
+              echo "retired mistake is back as a prescribed command: $bad"; exit 1
             fi
           done
           if grep -qF 'baseRepository' "$S"; then echo "baseRepository is not a gh field"; exit 1; fi
@@ -759,7 +842,25 @@ jobs:
               'official plugin validation (strict)': 'installs an npm package; one platform is enough',
               'platform parity': 'this check itself',
           }
-          steps = yaml.safe_load(io.open('.github/workflows/ci.yml', encoding='utf-8'))['jobs']['install']['steps']
+          wf = yaml.safe_load(io.open('.github/workflows/ci.yml', encoding='utf-8'))
+          # The premise of this whole check is that the matrix still runs on the
+          # three platforms. Deleting macos-latest, or excluding it, used to leave
+          # the guard printing "these run on macOS as well" over a matrix that
+          # had no macOS in it.
+          strat = wf['jobs']['install'].get('strategy', {})
+          mx = strat.get('matrix', {})
+          assert set(mx.get('os', [])) == {'ubuntu-latest', 'macos-latest', 'windows-latest'}, \
+              f'the platform matrix changed: {mx.get("os")}'
+          assert not mx.get('exclude'), f'matrix excludes combinations: {mx.get("exclude")}'
+          # Every job, not just this one: a second job full of Linux-only steps
+          # was entirely outside the guard's view.
+          for jname, job in wf['jobs'].items():
+              if jname == 'install':
+                  continue
+              for s in job.get('steps', []):
+                  cond = (s.get('if') or '').strip()
+                  assert not cond, f'job {jname} step "{s.get("name")}" is conditional: {cond}'
+          steps = wf['jobs']['install']['steps']
           # an exemption for a step that no longer exists is one a future step
           # could inherit by name without anyone deciding to
           stale = set(allowed) - {s.get('name') for s in steps}
@@ -776,6 +877,16 @@ jobs:
               cond = (s.get('if') or '').strip()
               if cond and cond != "runner.os != 'Windows'":
                   bad.append((name, cond))
+              # a step that cannot fail the job is a step that asserts nothing
+              if s.get('continue-on-error'):
+                  bad.append((name, 'continue-on-error: true'))
+              # ...and neither is one that returns early on a platform
+              body = s.get('run') or ''
+              for probe in ('uname', '$OSTYPE', 'RUNNER_OS', 'runner.os'):
+                  for line in body.splitlines():
+                      ls = line.strip()
+                      if probe in ls and ('exit 0' in ls or 'return 0' in ls):
+                          bad.append((name, f'body short-circuits by platform: {ls[:60]}'))
           if bad:
               for n, c in bad:
                   print(f'step "{n}" is gated to one platform: if: {c}')
