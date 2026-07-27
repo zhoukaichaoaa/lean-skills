@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.9.0 — 2026-07-27
+
+三份独立审计并行：命令级实测、CI 变异测试、声明对账。这轮的目标是把**故障形状**修掉，而不是再修一批实例。
+
+五轮下来每个 bug 都是同一件事：**命令没报错，只是安静地做了更小或更错的事**。这次按四条通用轴扫，而不是按已知实例：命令替换塌陷、退出码 0 不等于对、git 打印出来的名字不等于能喂回去的 pathspec、外部工具的字段得先跑过再写。
+
+**Critical（全部先复现）**
+
+- **`$(git merge-base HEAD MERGE_HEAD)` 在无共同祖先时塌陷成空**，`git diff --name-only MERGE_HEAD` 变成"对工作区比较"，exit 0。实测：分类结果**完全反过来** —— 合并合法带来的文件被判成用户的并被踢出索引，用户的 `user-notes.txt` 留在索引里进了合并提交。讽刺的是 `spec-review` 正好用整整一段教这个坑。现在两步走、读打印值、判空，并给出无共同祖先时的正确做法（对空树 diff）。
+- **`gh pr view --json baseRepository` 里没有这个字段**（合法的只有 `baseRefName`/`baseRefOid`）—— 0.8.2 我"修复" PR 基线时引入了一个不存在的字段，整条 PR 路径必然 exit 1，模型最自然的解读是"这里没有 PR"，于是滑到下一档用默认分支审。改用 **`baseRefOid`**：它本身就是 base 提交，整套"分支名转 ref"的推理都不需要。
+- **本地存在过期同名分支时 `merge-base dev HEAD` 会成功**，给出一个陈旧基线——比"不存在时响亮失败"危险得多，而 0.8.2 的措辞恰好只描述了失败那一半。
+- **默认分支兜底 `origin/main` 会静默选错**：默认分支是 `dev`/`trunk` 而 `main` 恰好也存在的仓库（gitflow、改名迁移期）会正常解析到错基线。改为先问远端（`git ls-remote --symref origin HEAD`），实在猜的要在报告里说是猜的。
+- **重命名只被救回一半**：`--name-only` 对重命名只给新路径，旧路径的删除仍在索引里、随合并提交落地。改用 `--name-status -M`。
+- **`worktree` 的守卫检查的是一条不会被创建的路径**：`:41` 允许选 `worktrees/`，代码块却写死 `.worktrees/`，于是忽略写在 A、检查 A、创建 B，守卫 exit 0 放行。目录名收进 `WTDIR` 一个变量，三处共用。
+
+**Important**
+
+- 非 ASCII 路径被 `core.quotePath` 八进制转义，粘回去的报错与"未跟踪路径"的报错**字面相同** —— 模型会照着 0.8.1 的教学把一个已跟踪文件从救援名单里删掉。全程加 `-c core.quotePath=false`。
+- 完成判据用 `git show --stat HEAD` 取证，而技能自己要求多提交 rebase 循环 —— 前几个提交它看不见。改用 `git log --name-only <起点>..HEAD`。
+- `worktree` Step 0 把非 git 目录和裸仓库都判成"普通检出"（两个变量都空、恰好相等）。增加 `--is-inside-work-tree` 前置。
+- `.plans` 路径表达式三处都没加引号（含空格的 worktree 路径下 `mkdir -p` 会 exit 0 建出垃圾目录），且在子模块里解析进 `.git/modules/`。三处加引号并注明子模块例外。
+- 空仓库里 `git rev-parse HEAD` 把字面 `HEAD` 打到 stdout —— 一个看起来完全合理的"SHA"。`implement` 第 3 步注明必须是 40 位十六进制。
+- `[DEBUG-a4f2]` 在 `grep` 里是字符类，清理命令会误匹配半个代码库。改为 `grep -rF '[DEBUG-'`。
+
+**CI：从测已知故障改为测契约**
+
+变异测试显示 41 个变异里有 21 个 CI 抓不到。补上：Windows 腿补齐 `-Adopt` / 退役名 / legacy 升级三项契约（此前**完全没有**，而这正是 0.8.0 那次 breaking fix 的全部内容）；锚点带 payload 且加反向断言（此前 `grep 'Never fall back to'` 只匹配前缀，把整句改成推荐 `@{upstream}` 仍然全绿）；新增外来 marker 内容、技能名上的非目录、无 tty 时不得覆盖、相对路径、干净卸载 exit 0、原子换名、总技能数与版本链一致性、安装器名单不得虚构技能名；守卫的残留检查从写死的 `skills/a` 改为整个 `skills/` 目录清单比对；夹具新增无共同祖先与重命名两例。
+
+发布清单加了两步：**更新 NOTICE 的逐文件行并用 `wc -w` 重算词数**、**本地把 CI 的每条腿在干净克隆上原样跑一遍**（这一步这次抓到了两个我自己写的 CI bug：`$srcDirs` 是计数不是列表、锚点没跟着技能改）。
+
+**文档**
+
+- NOTICE 仍写着内置 `/code-review`「覆盖正确性/安全/清理」，而 0.8.0 的 CHANGELOG 声称已同步修 NOTICE —— 声明与事实相反，现已改正（安全属 `/security-review`）。
+- NOTICE 的词数箭头两侧用了两种计数法（上游 `wc -w`、本仓库 `awk NF`），四行全部统一为 `wc -w` 并注明口径；`spec-review` 一行已过期两版。
+- NOTICE 补上 0.8.0–0.9.0 的逐文件条目（此前停在 0.7.0）。
+- DOCTRINE 的「零上下文成本」按 0.7.0 已在 README 采用的措辞改为「不花常驻 description 成本，正文在调用时进入上下文并留在会话里」。
+
 ## 0.8.2 — 2026-07-27
 
 第五方审计。两条发现均先复现再修。
@@ -189,4 +226,4 @@ CI 的 git 配方回归新增一例：推一个 `dev` 分支到远端后，断�
 
 ---
 
-**发布清单**：改 manifests 版本号 → 更新本文件 → 本地全量验证 + 自审 → commit & push → CI 绿 → `git tag vX.Y.Z && git push --tags` → `gh release create` → 核对 GitHub description → `claude plugin validate --strict .`
+**发布清单**：改 manifests 版本号 → **更新 NOTICE 的逐文件行并用 `wc -w` 重算词数** → 更新本文件 → 本地把 CI 的每条腿在干净克隆上原样跑一遍 → commit & push → CI 绿 → `git tag vX.Y.Z && git push --tags` → `gh release create` → 核对 GitHub description → `claude plugin validate --strict .`

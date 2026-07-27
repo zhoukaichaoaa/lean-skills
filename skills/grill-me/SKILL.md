@@ -20,7 +20,7 @@ If a *fact* can be found by exploring the environment (filesystem, git history, 
 
 Write the resolved tree to `<plans>/<slug>.md`, where the slug names the feature and `<plans>` is:
 
-- in a git repository: **`$(git rev-parse --git-common-dir)/../.plans`** — that resolves to the main checkout's `.plans/` from anywhere, including inside a linked worktree, which an untracked `.plans/` never gets copied into;
+- in a git repository: **`"$(git rev-parse --git-common-dir)/../.plans"`** — quoted, because that expands to an absolute path inside a linked worktree and repository paths contain spaces. It resolves to the main checkout's `.plans/` from anywhere, including inside a worktree, which an untracked `.plans/` never gets copied into. **Inside a submodule it does not** — it lands in `.git/modules/`, so check `git rev-parse --show-superproject-working-tree` first and use the superproject's `.plans/` when that is non-empty;
 - outside one: `.plans/` in the current directory.
 
 `/implement` and `spec-review` look it up the same way; a plan somewhere else is a plan they will not find, so move it only if you also tell them where.

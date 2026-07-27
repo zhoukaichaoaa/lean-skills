@@ -34,6 +34,7 @@ jobs:
           if command -v dash >/dev/null; then dash -n install.sh; fi
           SRC_FILES=$(find skills -type f | wc -l)
           SRC_DIRS=$(find skills -mindepth 1 -maxdepth 1 -type d | wc -l)
+          SRC_LIST=$(find skills -mindepth 1 -maxdepth 1 | sort)
           # every installed file, not just SKILL.md — a copy that dropped
           # tdd/tests.md would otherwise pass. Each installed directory also
           # gains one .lean-skills ownership marker.
@@ -48,7 +49,7 @@ jobs:
             test "$rc" -eq 2          || { echo "FAIL $1: exit $rc, want 2"; echo "$out"; exit 1; }
             grep -q 'refusing:' <<<"$out" || { echo "FAIL $1: no refusal message"; exit 1; }
             test -z "$(git status --porcelain)" || { echo "FAIL $1: repo dirty"; git status --porcelain; exit 1; }
-            test ! -e "$PWD/skills/a" || { echo "FAIL $1: left an empty directory behind"; exit 1; }
+            test "$(find skills -mindepth 1 -maxdepth 1 | sort)" = "$SRC_LIST" || { echo "FAIL $1: changed the contents of skills/"; exit 1; }
           }
 
           export CLAUDE_SKILLS_DIR="$RUNNER_TEMP/skills"
@@ -90,6 +91,41 @@ jobs:
           grep -q USER-OWNED "$T/tdd/SKILL.md"                  # ...including a same-named one
           test "$(find "$T" -name SKILL.md | wc -l)" -eq 3      # ours are gone, three of theirs remain
           test -z "$(git status --porcelain)"
+
+          # a foreign .lean-skills must not count as ours (content, not mere presence)
+          mkdir -p "$T/implement"; echo "someone elses marker" > "$T/implement/.lean-skills"
+          echo THEIRS > "$T/implement/SKILL.md"
+          set +e; CLAUDE_SKILLS_DIR="$T" ./install.sh -y >/dev/null 2>&1; rc=$?; set -e
+          test "$rc" -eq 3 || { echo "a foreign marker was accepted as ours"; exit 1; }
+          grep -q THEIRS "$T/implement/SKILL.md"
+
+          # a non-directory at one of our names is still the users
+          rm -rf "$T/worktree"; : > "$T/worktree"
+          set +e; CLAUDE_SKILLS_DIR="$T" ./install.sh -y >/dev/null 2>&1; rc=$?; set -e
+          test -f "$T/worktree" || { echo "install destroyed a non-directory at our name"; exit 1; }
+          test "$rc" -eq 3 || { echo "a non-directory at our name must block too, got $rc"; exit 1; }
+          rm -f "$T/worktree"
+
+          # no -y and no tty: nothing may be overwritten, not even with --adopt
+          C="$RUNNER_TEMP/consent"; mkdir -p "$C/grill-me"; echo MINE > "$C/grill-me/SKILL.md"
+          set +e; CLAUDE_SKILLS_DIR="$C" ./install.sh --adopt </dev/null >/dev/null 2>&1; set -e
+          grep -q MINE "$C/grill-me/SKILL.md" || { echo "--adopt overwrote without consent"; exit 1; }
+
+          # a relative target is refused, and writes nothing
+          set +e; CLAUDE_SKILLS_DIR=rel/here ./install.sh -y >/dev/null 2>&1; rc=$?; set -e
+          test "$rc" -eq 2 || { echo "relative CLAUDE_SKILLS_DIR should exit 2, got $rc"; exit 1; }
+          test ! -e rel || { echo "wrote into a relative path"; exit 1; }
+
+          # the clean uninstall path: all ours, nothing spared, exit 0
+          K="$RUNNER_TEMP/clean"
+          CLAUDE_SKILLS_DIR="$K" ./install.sh -y >/dev/null
+          CLAUDE_SKILLS_DIR="$K" ./install.sh --uninstall >/dev/null
+          test "$(find "$K" -name SKILL.md | wc -l)" -eq 0
+          test "$(find "$K" -name .lean-skills | wc -l)" -eq 0
+
+          # atomic swap kept, and no staging directory left behind
+          grep -qF 'mv "$staging" "$dest_abs/$name"' install.sh
+          test -z "$(find "$RUNNER_TEMP" -maxdepth 3 -name '.lean-skills-staging-*')"
 
           # upgrading from a version that wrote no markers must not silently no-op
           U="$RUNNER_TEMP/legacy"
@@ -186,6 +222,55 @@ jobs:
           }
           $left = (Get-ChildItem -Recurse -Filter SKILL.md -LiteralPath $T).Count
           if ($left -ne 2) { throw "uninstall left $left SKILL.md, want 2 (both theirs)" }
+          # parity with the bash leg: --Adopt, retired names, and the legacy upgrade
+          $U = Join-Path $env:RUNNER_TEMP 'legacy'
+          $skillNames = @(Get-ChildItem -Directory skills | ForEach-Object { $_.Name })
+          foreach ($n in $skillNames) {
+            [IO.Directory]::CreateDirectory((Join-Path $U $n)) | Out-Null
+            [IO.File]::WriteAllText((Join-Path $U ($n + '\SKILL.md')), 'OLD')
+          }
+          [IO.Directory]::CreateDirectory((Join-Path $U 'code-review')) | Out-Null
+          [IO.File]::WriteAllText((Join-Path $U 'code-review\SKILL.md'), 'OLD')
+          $env:CLAUDE_SKILLS_DIR = $U
+          & powershell -NoProfile -File .\install.ps1 -Yes | Out-Null
+          if ($LASTEXITCODE -ne 3) { throw "legacy upgrade should exit 3, got $LASTEXITCODE" }
+          if ((Get-Content -Raw (Join-Path $U 'tdd\SKILL.md')) -notmatch 'OLD') { throw "overwrote without -Adopt" }
+          & powershell -NoProfile -File .\install.ps1 -Yes -Adopt | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "-Adopt should succeed, got $LASTEXITCODE" }
+          if ((Get-Content -Raw (Join-Path $U 'tdd\SKILL.md')) -match 'OLD') { throw "-Adopt did not take over" }
+          if (Test-Path -LiteralPath (Join-Path $U 'code-review')) { throw "-Adopt left the retired skill behind" }
+          $m = (Get-ChildItem -Recurse -Filter .lean-skills -Force -LiteralPath $U).Count
+          if ($m -ne $skillNames.Count) { throw "expected $($skillNames.Count) markers after adopt, got $m" }
+          & powershell -NoProfile -File .\install.ps1 -Uninstall -Adopt | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "uninstall -Adopt should exit 0, got $LASTEXITCODE" }
+          if ((Get-ChildItem -Recurse -Filter SKILL.md -LiteralPath $U -ErrorAction SilentlyContinue).Count -ne 0) {
+            throw "uninstall -Adopt left skills behind"
+          }
+
+          # a foreign marker is not ours; a non-directory at our name is not ours
+          $F = Join-Path $env:RUNNER_TEMP 'foreign'
+          [IO.Directory]::CreateDirectory((Join-Path $F 'implement')) | Out-Null
+          [IO.File]::WriteAllText((Join-Path $F 'implement\.lean-skills'), 'someone elses marker')
+          [IO.File]::WriteAllText((Join-Path $F 'implement\SKILL.md'), 'THEIRS')
+          [IO.File]::WriteAllText((Join-Path $F 'worktree'), 'a plain file at our name')
+          $env:CLAUDE_SKILLS_DIR = $F
+          & powershell -NoProfile -File .\install.ps1 -Yes | Out-Null
+          if ($LASTEXITCODE -ne 3) { throw "foreign marker / non-directory should block, got $LASTEXITCODE" }
+          if ((Get-Content -Raw (Join-Path $F 'implement\SKILL.md')) -notmatch 'THEIRS') { throw "a foreign marker was accepted as ours" }
+          if (-not (Test-Path -LiteralPath (Join-Path $F 'worktree') -PathType Leaf)) { throw "destroyed a non-directory at our name" }
+
+          # a relative target is refused and writes nothing
+          $env:CLAUDE_SKILLS_DIR = 'rel-here'
+          $threw = $false
+          try { & .\install.ps1 -Yes | Out-Null } catch { $threw = $true }
+          if (-not $threw) { throw "relative CLAUDE_SKILLS_DIR was accepted" }
+          if (Test-Path -LiteralPath (Join-Path $repo 'rel-here')) { throw "wrote into a relative path" }
+
+          # the script must parse, including branches this run never enters
+          $perr = $null
+          [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path .\install.ps1), [ref]$null, [ref]$perr)
+          if ($perr) { throw "install.ps1 parse errors: $($perr -join '; ')" }
+
           $dirty = git status --porcelain
           if ($dirty) { throw "repo dirty at end: $dirty" }
 
@@ -220,7 +305,24 @@ jobs:
               for s in manual:
                   assert s in tail, f'{path}: {s} missing from the manual line'
           plugin = json.load(io.open('.claude-plugin/plugin.json', encoding='utf-8'))
-          assert f'{len(resident)} resident' in plugin['description'], plugin['description']
+          mk = json.load(io.open('.claude-plugin/marketplace.json', encoding='utf-8'))
+          p0 = mk['plugins'][0]
+          total = len(resident) + len(manual)
+          blurb = f'{total} skills, {len(resident)} resident'
+          for d in (plugin['description'], p0['description']):
+              assert blurb in d, (blurb, d)
+          assert plugin['version'] == p0['version'] == mk['metadata']['version'], 'version drift'
+          assert plugin['version'] in io.open('CHANGELOG.md', encoding='utf-8').read(), 'version missing from CHANGELOG'
+          # the installer lists must name every skill and invent none
+          import re as _re
+          for path in ('install.sh', 'install.ps1'):
+              blob = io.open(path, encoding='utf-8').read()
+              tail = blob[blob.index('Resident (model-invoked)'):]
+              listed = set(_re.findall(r'(?<![\w-])[a-z][a-z0-9]*(?:-[a-z0-9]+)+(?![\w-])', tail))
+              listed |= {w for w in _re.findall(r'(?<![\w-])[a-z]{3,}(?![\w-])', tail)}
+              known = set(resident) | set(manual)
+              ghosts = {n for n in listed if '-' in n} - known - {'model-invoked', 'user-invoked', 'lean-skills', 'spec-review'}
+              assert not ghosts, f'{path} advertises skills that do not exist: {sorted(ghosts)}'
           print('ok: 9 skills,', len(resident), 'resident,', len(manual), 'manual; installer lists agree')
           EOF
 
@@ -278,13 +380,27 @@ jobs:
           set -euo pipefail
           M=skills/resolving-merge-conflicts/SKILL.md
           S=skills/spec-review/SKILL.md
-          grep -qF 'git merge-base HEAD MERGE_HEAD) MERGE_HEAD' "$M"
+          # what the skills must say
+          grep -qF 'merge-base HEAD MERGE_HEAD' "$M"
           grep -qF 'REBASE_HEAD^ REBASE_HEAD' "$M"
           grep -qF 'CHERRY_PICK_HEAD^ CHERRY_PICK_HEAD' "$M"
           grep -qF 'REVERT_HEAD^ REVERT_HEAD' "$M"
           grep -qF 'git restore --staged --' "$M"
-          grep -qF 'Never fall back to' "$S"
-          grep -qF 'refs/remotes/<that-remote>/<baseRefName>' "$S"
+          grep -qF 'name-status -M' "$M"
+          grep -qF 'core.quotePath=false' "$M"
+          grep -qF 'hash-object -t tree' "$M"
+          grep -qF 'Never fall back to `@{upstream}`' "$S"
+          grep -qF 'baseRefOid' "$S"
+          # and what they must never say again - each of these shipped as a bug once
+          for bad in 'diff --name-only HEAD MERGE_HEAD' 'diff --name-status -M HEAD MERGE_HEAD' 'diff --cached --name-only'; do
+            if grep -qF "$bad" "$M"; then echo "retired mistake is back in $M: $bad"; exit 1; fi
+          done
+          for bad in 'baseRepository' 'merge-base HEAD @{upstream}'; do
+            if grep -qF "$bad" "$S" && ! grep -qF "Never fall back to \`@{upstream}\`" "$S"; then
+              echo "retired mistake is back in $S: $bad"; exit 1
+            fi
+          done
+          if grep -qF 'baseRepository' "$S"; then echo "baseRepository is not a gh field"; exit 1; fi
 
           new_repo() {
             rm -rf "$1"; git init -q "$1"; cd "$1"
@@ -298,7 +414,9 @@ jobs:
 
           new_repo "$RUNNER_TEMP/r-merge"
           git merge feat >/dev/null 2>&1 || true
-          BRINGS=$(git diff --name-only "$(git merge-base HEAD MERGE_HEAD)" MERGE_HEAD)
+          BASE=$(git merge-base HEAD MERGE_HEAD)
+          test -n "$BASE" || { echo "merge-base printed nothing on a normal merge"; exit 1; }
+          BRINGS=$(git diff --name-only "$BASE" MERGE_HEAD)
           test "$BRINGS" = "f.txt" || { echo "merge brings [$BRINGS], want f.txt"; exit 1; }
           if ! git diff --name-only HEAD MERGE_HEAD | grep -q side.txt; then
             echo "fixture no longer shows why HEAD..MERGE_HEAD is the wrong range"; exit 1
@@ -320,6 +438,24 @@ jobs:
           git status --porcelain | grep -q '^?? untracked.txt'
           git status --porcelain | grep -q '^ M side.txt'
 
+          # unrelated histories: merge-base prints nothing, and an empty base must not
+          # be substituted into the diff - it would compare against the working tree
+          rm -rf "$RUNNER_TEMP/r-unrel"; git init -q "$RUNNER_TEMP/r-unrel"; cd "$RUNNER_TEMP/r-unrel"
+          git config user.email ci@ci; git config user.name ci
+          echo a > shared.txt; echo a > a-only.txt; git add -A; git commit -qm A
+          git checkout -q --orphan other; git rm -rqf .
+          echo b > shared.txt; echo b > b-only.txt; git add -A; git commit -qm B
+          git checkout -q master 2>/dev/null || git checkout -q main
+          git merge --allow-unrelated-histories other >/dev/null 2>&1 || true
+          if git merge-base HEAD MERGE_HEAD >/dev/null 2>&1; then
+            echo "fixture no longer shows the unrelated-histories case"; exit 1
+          fi
+          EMPTYTREE=$(git hash-object -t tree /dev/null)
+          BRINGS=$(git diff --name-only "$EMPTYTREE" MERGE_HEAD | sort | paste -sd, -)
+          test "$BRINGS" = "b-only.txt,shared.txt" || { echo "empty-tree base brings [$BRINGS]"; exit 1; }
+          COLLAPSED=$(git diff --name-only MERGE_HEAD | sort | paste -sd, -)
+          test "$COLLAPSED" != "$BRINGS" || { echo "fixture no longer shows why a collapsed base is wrong"; exit 1; }
+
           new_repo "$RUNNER_TEMP/r-cp"
           git cherry-pick feat >/dev/null 2>&1 || true
           test -f "$(git rev-parse --git-dir)/CHERRY_PICK_HEAD"
@@ -327,6 +463,15 @@ jobs:
           if git diff --name-only REBASE_HEAD^ REBASE_HEAD >/dev/null 2>&1; then
             echo "REBASE_HEAD resolved during a cherry-pick; the per-operation split is moot"; exit 1
           fi
+
+          # a rename gives only the new path under --name-only; -M gives both
+          new_repo "$RUNNER_TEMP/r-mv"
+          git merge feat >/dev/null 2>&1 || true
+          git mv side.txt renamed.txt
+          if git diff --cached --name-only HEAD | grep -qx side.txt; then
+            echo "fixture no longer shows --name-only hiding the old path"; exit 1
+          fi
+          git diff --cached --name-status -M HEAD | grep -q 'side.txt'
 
           new_repo "$RUNNER_TEMP/r-up"
           git init -q --bare "$RUNNER_TEMP/origin.git"

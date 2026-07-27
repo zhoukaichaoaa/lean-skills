@@ -11,10 +11,13 @@ Work happens in an isolated workspace. Detect existing isolation, then prefer th
 ## Step 0 — Detect existing isolation
 
 ```bash
+git rev-parse --is-inside-work-tree                          # must print true
 GIT_DIR=$(cd "$(git rev-parse --git-dir)" 2>/dev/null && pwd -P)
 GIT_COMMON=$(cd "$(git rev-parse --git-common-dir)" 2>/dev/null && pwd -P)
 git rev-parse --show-superproject-working-tree 2>/dev/null   # non-empty ⇒ submodule
 ```
+
+If the first command does not print `true` — no repository here, or a bare one — stop and say so. Both leave `GIT_DIR` and `GIT_COMMON` empty, which compares equal and would otherwise be read as an ordinary checkout.
 
 `GIT_DIR != GIT_COMMON` **and not a submodule** ⇒ you are already in a linked worktree. Report the path and branch, then go to Step 2. The submodule check also tells Step 1 which exclude file to write: submodules keep `.git` as a file, so the literal `.git/info/exclude` path does not exist there.
 
@@ -32,11 +35,15 @@ If they decline, work in place and go to Step 2.
 
 ```bash
 BRANCH=fix-checkout-retry        # the name chosen above
-echo ".worktrees/" >> "$(git rev-parse --git-common-dir)/info/exclude"
-git check-ignore -q ".worktrees/$BRANCH" || { echo "still not ignored"; exit 1; }
-git worktree add ".worktrees/$BRANCH" -b "$BRANCH"
-cd ".worktrees/$BRANCH"
+WTDIR=.worktrees                 # or the directory chosen below — one variable, three uses
+grep -qxF "$WTDIR/" "$(git rev-parse --git-common-dir)/info/exclude" 2>/dev/null ||
+  echo "$WTDIR/" >> "$(git rev-parse --git-common-dir)/info/exclude"
+git check-ignore -q "$WTDIR/$BRANCH" || { echo "still not ignored"; exit 1; }
+git worktree add "$WTDIR/$BRANCH" -b "$BRANCH"
+cd "$WTDIR/$BRANCH"
 ```
+
+Keep the directory in `WTDIR` rather than repeating it: the ignore pattern, the check and the path handed to `git worktree add` must be the same string. Write `.worktrees/` into exclude while creating `worktrees/` and the check passes on a path nobody creates — which is the whole failure this guard exists to prevent.
 
 Directory choice, in priority order: an explicit user preference, then an existing `.worktrees/` or `worktrees/` (`.worktrees` wins if both), then `.worktrees/` as the default.
 

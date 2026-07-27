@@ -20,11 +20,26 @@ You run as a forked subagent with none of the caller's conversation. Everything 
 
 With no base ref, work down this list:
 
-1. **An open PR on this branch.** `gh pr view --json baseRefName,baseRepository` gives you a **branch name, not a ref** — `dev`, not `origin/dev`. A local branch of that name usually does not exist, and `git merge-base dev HEAD` then fails with exit 128. Resolve it yourself: find the remote whose URL matches `baseRepository` (`git remote -v`; for a fork PR that is the upstream remote, not `origin`), and use the literal `refs/remotes/<that-remote>/<baseRefName>`. Fetch it if it is missing (`git fetch <remote> <baseRefName>`).
+1. **An open PR on this branch.**
+
+   ```bash
+   gh pr view --json baseRefName,baseRefOid,isCrossRepository
+   ```
+
+   Use **`baseRefOid`** — it is the base commit itself, so no branch name has to be turned into a ref. If the object is missing locally, fetch it (`git fetch origin <baseRefName>`; for a fork PR, `isCrossRepository` is true and the base lives on the upstream remote).
+
+   Do **not** use `baseRefName` as a ref. It is a branch name — `dev`, not `origin/dev`. When no local `dev` exists the command fails loudly, which is survivable; the dangerous case is when a *stale* local `dev` exists, because then `git merge-base dev HEAD` succeeds and hands you a base from whenever that branch was last fetched, quietly adding other people's commits to the review.
 
    **A PR exists but its base cannot be resolved? Stop and report that.** Do not slide down to step 2 — reviewing a PR that targets `release/3.2` against `main` produces a diff full of other people's commits, and every finding drawn from it is fiction.
 
-2. **No PR at all** — the remote's default branch: `git symbolic-ref refs/remotes/origin/HEAD`, else `origin/main` / `origin/master`.
+2. **No PR at all** — the remote's default branch:
+
+   ```bash
+   git symbolic-ref refs/remotes/origin/HEAD     # absent in --single-branch and older clones
+   git ls-remote --symref origin HEAD            # asks the remote; needs no local ref
+   ```
+
+   Only if both fail, try `origin/main` then `origin/master` — and say in the report that the default branch was **guessed**. A repository whose default is `dev` or `trunk` may well also have a `main`, and `origin/main` will resolve happily against the wrong base.
 
 3. Nothing resolves. Make "no base ref, and none could be inferred" the whole report.
 
@@ -43,7 +58,7 @@ Read any untracked files that belong to the change; they are additions the diff 
 
 ## 2. Find the spec
 
-In order: the path the caller passed; a tracker issue referenced in the commit messages (`#123`, `Closes #45` — fetch with `gh issue view <n>`); a plan from `/grill-me` at `$(git rev-parse --git-common-dir)/../.plans` (that path resolves to the main checkout from inside a worktree too, where an untracked `.plans/` never appears); a spec file under `docs/`, `specs/`, or `.scratch/`.
+In order: the path the caller passed; a tracker issue referenced in the commit messages (`#123`, `Closes #45` — fetch with `gh issue view <n>`); a plan from `/grill-me` at `"$(git rev-parse --git-common-dir)/../.plans"` (that path resolves to the main checkout from inside a worktree too, where an untracked `.plans/` never appears); a spec file under `docs/`, `specs/`, or `.scratch/`.
 
 **Take a plan only if it matches this change** — its slug or title names the branch or feature. Several candidates, or none that match: report that and stop. (Do not judge by file age: a plan written before a `git pull` is older than the base commit and still the right plan.) A stale plan from another feature yields confident, entirely fictional findings, which is worse than no review.
 
