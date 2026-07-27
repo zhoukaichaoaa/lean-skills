@@ -41,7 +41,7 @@
 
 常驻/手动的区分用的是 Claude Code 官方字段 `disable-model-invocation`（[文档](https://code.claude.com/docs/en/skills#control-who-invokes-a-skill)）。官方语义：设为 `true` 时 **description 不进上下文、模型无法调用**，只能由你 `/名字` 触发。
 
-> **不要与 Claude Code 内置的 `/code-review` 重名。** 官方规则：personal 层的同名技能会**替换掉内置技能**（[文档](https://code.claude.com/docs/en/skills#skill-locations) 举的例子恰好就是 `code-review`）。内置那个自 v2.1.218 起以**独立上下文的后台子代理**运行，覆盖正确性、安全与清理——顶掉它是纯损失。所以本合集把自己的评审技能改名为 `spec-review` 并收窄到内置技能唯一做不到的那一轴：**这改动是不是当初要的东西**（它不知道 `/grill-me` 的计划）。两者配合用，不是二选一。
+> **不要与 Claude Code 内置的 `/code-review` 重名。** 官方规则：personal 层的同名技能会**替换掉内置技能**（[文档](https://code.claude.com/docs/en/skills#where-skills-live) 举的例子就是 `code-review`（原文用的是 project 层，规则本身是「任一层级的同名技能都覆盖内置」，personal 层同理））。内置那个自 v2.1.218 起以**独立上下文的后台子代理**运行，覆盖正确性 bug 与 reuse/simplification/efficiency 清理（安全是另一个命令 `/security-review` 的事）——顶掉它是纯损失。所以本合集把自己的评审技能改名为 `spec-review` 并收窄到内置技能唯一做不到的那一轴：**这改动是不是当初要的东西**（它不知道 `/grill-me` 的计划）。两者配合用，不是二选一。
 >
 > **分层标准（0.3.0）**：常驻的入场券是双重测试 —— **触发点在模型盲区**（正要说"修好了"、批评刚到、同一个 bug 修第二刀：这些瞬间模型不会觉得自己需要被拦），**且内容是护栏而非教材**（Claude 已掌握工程知识本身，技能补的是行为约束，不是重讲一遍软件工程课）。TDD 和开工作区是工作方式的选择，时机该由你掌控 —— 官方文档也把"想控制时机的工作流"归给 `disable-model-invocation`。`implement` 不再跨层调用它们（模型调不到手动技能），改为内联各自的一句话护栏（接缝先约定、纵切、工作区先问再开、基线先绿），完整版留给手动的 `/tdd` 和 `/worktree`。
 >
@@ -67,7 +67,7 @@ cd lean-skills
 .\install.ps1             # 覆盖前会逐个询问；-Yes 跳过询问
 ```
 
-两个脚本都把技能复制到 `~/.claude/skills/`，重启会话生效。装到别处：设 `CLAUDE_SKILLS_DIR` 环境变量。
+两个脚本都把技能复制到 `~/.claude/skills/`。**首次安装**（该目录此前不存在）需重启会话；之后的升级在当前会话内热生效。装到别处：把 `CLAUDE_SKILLS_DIR` 设为绝对路径。
 
 **卸载 / 升级**：
 
@@ -75,9 +75,19 @@ cd lean-skills
 ./install.sh --uninstall      # Windows: .\install.ps1 -Uninstall
 ```
 
-只移除本合集的 9 个技能，你自己创建的技能不动。跨版本升级时如果某个技能被改名或删除，普通覆盖不会清掉旧目录 —— 先 `--uninstall` 再装。
+只移除本合集的技能，你自己创建的同名技能不动 —— 靠的是安装时写进每个目录的 `.lean-skills` 标记。
 
-安装器在动手前用**写探针**确认目标不是源目录：往目标写一个标记文件，若它出现在仓库的 `skills/` 里就直接拒绝。这比比较路径字符串更可靠 —— 符号链接、Windows junction、链式链接、父目录是链接、大小写差异都骗不过它（v0.5.0 修复：此前 Windows 上一个指向仓库的 junction 能让 `-Uninstall` 静默删光源文件）。
+**从 0.6.0 及更早版本升级，必须加 `--adopt`：**
+
+```bash
+./install.sh -y --adopt        # Windows: .\install.ps1 -Yes -Adopt
+```
+
+0.7.0 才引入标记，旧版本装的目录没有它。安装器分不清「这是用户自己写的」和「这是我们上一版装的」，所以**默认两者都不动**并以退出码 3 告知 —— 不加 `--adopt` 的升级会静默地什么都不做（8/9 技能停留在旧版，改名前的 `code-review/` 继续遮蔽内置命令）。`--adopt` 表示「同名目录都算我们的」，它同时会清掉已退役的 `code-review/`。
+
+如果那些同名目录**确实是你自己写的**，别加 `--adopt` —— 改用 `CLAUDE_SKILLS_DIR` 装到别处。
+
+安装器在动手前用**双向 canary** 确认目标不是源目录：往仓库里写一个标记文件、从目标逐级向上问文件系统能否看到它；再反过来往目标写一个、从仓库向上问一遍。读操作会穿透符号链接与 junction，所以「目标就是源」「目标落在源内部」「源落在目标内部」三种情形都能识别 —— 比比较路径字符串可靠得多（v0.5.0 与 v0.8.0 各修掉过一个方向：前者是父组件为链接时漏判，后者是 junction 指向仓库根时 Windows 侧完全失守，实测会把 9 个目录写进仓库）。
 
 也可以作为插件安装：
 
@@ -86,7 +96,7 @@ cd lean-skills
 /plugin install lean-skills@lean-skills
 ```
 
-插件模式下技能带命名空间：`/lean-skills:implement`。裸名 `/implement` 通常也能用——[除非同名的命令已经存在](https://code.claude.com/docs/en/skills#skill-locations)。本合集没有与内置技能重名的技能（`spec-review` 正是为此从 `code-review` 改名），所以两种写法都可以。
+插件模式下技能带命名空间：`/lean-skills:implement`。裸名 `/implement` 通常也能用——[除非同名的命令已经存在](https://code.claude.com/docs/en/skills#how-a-skill-gets-its-command-name)。本合集没有与内置技能重名的技能（`spec-review` 正是为此从 `code-review` 改名），所以两种写法都可以。
 
 ### 如果你已经装了 superpowers 插件
 
@@ -130,7 +140,7 @@ cd lean-skills
   → typecheck / 单文件测试跑着，最后跑全量
   → verification-before-completion：每个结论都带命令输出，计划里每条决策都有交代
   → spec-review（forked 子代理）：这改动是不是计划要的东西
-  → 请你跑内置 /code-review：正确性、安全、清理
+  → 请你跑内置 /code-review：正确性 + 清理（涉鉴权/输入/密钥再跑 /security-review）
   → receiving-code-review：逐条核实评审发现再动手
   → 改完再验一遍：修 finding 会让上一步的证据失效
   → 交付：diff 摆出来，你点头才 commit

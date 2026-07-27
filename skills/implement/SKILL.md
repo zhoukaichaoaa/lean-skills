@@ -15,13 +15,17 @@ Build the work described in the plan, spec, tickets, or the understanding we jus
 4. **Tests first, at the agreed seams.** Use the seams named in the plan; if there is no plan, name them now and confirm them with the user. Then vertical slices: one failing test → just enough code to pass it → repeat. Expected values come from an independent source of truth, never recomputed the way the code computes them. (For the full reference, ask the user to run `/tdd`.)
 5. **Keep the loop tight** — typecheck often, run the single relevant test file often, run the full suite once at the end.
 6. **Prove it** — re-read the plan first; on a long run it has left your context, and the checks below are against what it actually says, not what you remember. Then `verification-before-completion`: every claim in your report carries the command output that backs it, and every decision in the plan is accounted for as built, deferred, or dropped.
-7. **Review it.** Run `spec-review` with the literal SHA from step 3 and the plan's path — it answers "is this what was asked for", which no other reviewer can know. Then ask the user to run the built-in `/code-review` for correctness, security and cleanups; it reads the whole codebase in its own subagent, so there is no reason to re-derive that here. Take every finding through `receiving-code-review`: check each against the codebase before acting on it.
+7. **Review it.** Run `spec-review` with the literal SHA from step 3 and the plan's path — it answers "is this what was asked for", which no other reviewer can know. Then ask the user to run the built-in `/code-review` for correctness bugs and cleanups; it reads the whole codebase in its own subagent, so there is no reason to re-derive that here. If the change touches auth, input handling or secrets, ask for `/security-review` too — neither of the other two covers security. Take every finding through `receiving-code-review`: check each against the codebase before acting on it.
 8. **Re-verify whatever the review changed.** Fixing a finding invalidates the evidence from step 6 — the test run, the build, the typecheck all describe code that no longer exists. Run them again after the last edit. For user-visible behaviour, actually exercise it rather than inferring from green tests.
 9. **Hand over.** Present the verified result and the diff. Commit when the user has asked for one — in the ticket, in conversation, or by accepting your offer; otherwise leave the tree for their inspection.
 
 If the work stalls on something broken rather than something unbuilt, switch to `diagnosing-bugs`.
 
 If a decision in the plan turns out to be wrong once you are in the code, say so and amend the plan with the user. Quietly building something the plan does not describe leaves the review with nothing true to check against.
+
+## Completion criterion
+
+Every decision in the plan is built, deferred, or dropped with a reason; the last edit you made has been followed by a full check run whose output you can quote; `spec-review` has run and its findings are each fixed, refuted, or waiting on the user; and you have named the two things you are handing over — the base SHA from step 3, and whether you committed. Step 7's request that the user run the built-in `/code-review` is theirs to act on: say you have asked, and do not count it as done yourself.
 
 ---
 

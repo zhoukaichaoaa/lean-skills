@@ -33,14 +33,14 @@ If they decline, work in place and go to Step 2.
 ```bash
 BRANCH=fix-checkout-retry        # the name chosen above
 echo ".worktrees/" >> "$(git rev-parse --git-common-dir)/info/exclude"
-git check-ignore -q .worktrees || { echo "still not ignored — stop here"; }
+git check-ignore -q ".worktrees/$BRANCH" || { echo "still not ignored"; exit 1; }
 git worktree add ".worktrees/$BRANCH" -b "$BRANCH"
 cd ".worktrees/$BRANCH"
 ```
 
 Directory choice, in priority order: an explicit user preference, then an existing `.worktrees/` or `worktrees/` (`.worktrees` wins if both), then `.worktrees/` as the default.
 
-Prefer the repo-local exclude file over editing `.gitignore`: same effect, no tracked-file change, no commit question. Reach it through `git rev-parse --git-common-dir`, never the literal path `.git/info/exclude` — inside a submodule `.git` is a *file*, and from a subdirectory it isn't there at all, so the literal path silently fails. **Confirm with `git check-ignore` before creating the worktree**: an unignored worktree directory puts the whole tree on track to be committed into the repo. Offer a `.gitignore` entry only if the user wants the ignore shared with the team.
+Prefer the repo-local exclude file over editing `.gitignore`: same effect, no tracked-file change, no commit question. Reach it through `git rev-parse --git-common-dir`, never the literal path `.git/info/exclude` — inside a submodule `.git` is a *file*, and from a subdirectory it isn't there at all, so the literal path silently fails. **Confirm with `git check-ignore` before creating the worktree**, and test a path *inside* the directory rather than the directory itself: a pattern ending in `/` only matches directories, and `check-ignore` cannot tell that a path which does not exist yet would be one — asked about `.worktrees` before it exists, it answers "not ignored" every time. An unignored worktree directory puts the whole tree on track to be committed into the repo. Offer a `.gitignore` entry only if the user wants the ignore shared with the team.
 
 If the branch or the worktree path already exists, reuse it when it is yours and clean; otherwise pick a new name — `git worktree add` refuses duplicates. If it fails on a permission error, say the sandbox blocked it and continue in the current directory.
 

@@ -31,7 +31,7 @@ jobs:
           if grep -q $'\r' install.sh; then echo "CRLF found in install.sh"; exit 1; fi
           test -x install.sh
           sh -n install.sh
-          command -v dash >/dev/null && dash -n install.sh || true
+          if command -v dash >/dev/null; then dash -n install.sh; fi
           SRC_FILES=$(find skills -type f | wc -l)
           SRC_DIRS=$(find skills -mindepth 1 -maxdepth 1 -type d | wc -l)
           # every installed file, not just SKILL.md — a copy that dropped
@@ -48,6 +48,7 @@ jobs:
             test "$rc" -eq 2          || { echo "FAIL $1: exit $rc, want 2"; echo "$out"; exit 1; }
             grep -q 'refusing:' <<<"$out" || { echo "FAIL $1: no refusal message"; exit 1; }
             test -z "$(git status --porcelain)" || { echo "FAIL $1: repo dirty"; git status --porcelain; exit 1; }
+            test ! -e "$PWD/skills/a" || { echo "FAIL $1: left an empty directory behind"; exit 1; }
           }
 
           export CLAUDE_SKILLS_DIR="$RUNNER_TEMP/skills"
@@ -58,6 +59,8 @@ jobs:
           guard_refuses "$PWD/skills/tdd"        # target inside the source
           guard_refuses "$PWD"                   # source inside the target
           guard_refuses "$PWD/skills/a/b/c"      # nested + non-existent (exercises the undo path)
+          ln -s "$PWD" "$RUNNER_TEMP/link-root"
+          guard_refuses "$RUNNER_TEMP/link-root"          # source inside a linked target
           ln -s "$PWD/skills" "$RUNNER_TEMP/link-src"
           guard_refuses "$RUNNER_TEMP/link-src"  # symlink to the source
           ln -s "$RUNNER_TEMP/link-src" "$RUNNER_TEMP/link-chain"
@@ -83,6 +86,18 @@ jobs:
           grep -q USER-OWNED "$T/tdd/SKILL.md"                  # ...including a same-named one
           test "$(find "$T" -name SKILL.md | wc -l)" -eq 3      # ours are gone, three of theirs remain
           test -z "$(git status --porcelain)"
+
+          # upgrading from a version that wrote no markers must not silently no-op
+          U="$RUNNER_TEMP/legacy"
+          for s in $(ls skills); do mkdir -p "$U/$s"; echo OLD > "$U/$s/SKILL.md"; done
+          mkdir -p "$U/code-review" && echo OLD > "$U/code-review/SKILL.md"   # a retired name
+          set +e; CLAUDE_SKILLS_DIR="$U" ./install.sh -y >/dev/null 2>&1; rc=$?; set -e
+          test "$rc" -eq 3 || { echo "legacy upgrade should exit 3, got $rc"; exit 1; }
+          grep -q OLD "$U/tdd/SKILL.md" || { echo "legacy upgrade overwrote without --adopt"; exit 1; }
+          CLAUDE_SKILLS_DIR="$U" ./install.sh -y --adopt >/dev/null
+          if grep -q OLD "$U/tdd/SKILL.md"; then echo "--adopt did not take over"; exit 1; fi
+          test ! -e "$U/code-review" || { echo "--adopt left the retired skill behind"; exit 1; }
+          test "$(find "$U" -name .lean-skills | wc -l)" -eq "$SRC_DIRS"
 
       - name: install.ps1
         if: runner.os == 'Windows'
@@ -135,6 +150,9 @@ jobs:
           # which a marker written into the target cannot detect
           Assert-Refused "$env:RUNNER_TEMP\j1\sub" 'Yes'
           Assert-Refused "$env:RUNNER_TEMP\j1\x\y" 'Yes'
+          # junction to the repo root: the source sits inside the target, which a
+          # canary planted in the source can never reveal by walking upward
+          foreach ($op in @('Yes','Uninstall')) { Assert-Refused "$env:RUNNER_TEMP\jroot" $op }
 
           # Windows drops empty environment variables, so the set-but-empty case
           # install.sh guards against cannot occur here — asserted, not assumed.

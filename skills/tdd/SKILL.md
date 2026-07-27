@@ -38,4 +38,4 @@ Ask: "What's the public interface, and which seams should we test?"
 
 ---
 
-_From [mattpocock/skills](https://github.com/mattpocock/skills) `tdd` (MIT); body unmodified apart from this attribution, frontmatter switched to user-invoked in 0.3.0. `tests.md` and `mocking.md` copied verbatim. Note: the loop here is deliberately Red→Green only — upstream defers refactoring to the review stage (`code-review`) instead of the classic Red-Green-Refactor third beat; that split is upstream's design, kept as-is._
+_From [mattpocock/skills](https://github.com/mattpocock/skills) `tdd` (MIT); body unmodified apart from this attribution, frontmatter switched to user-invoked in 0.3.0. `tests.md` and `mocking.md` copied verbatim. Note: the loop here is deliberately Red→Green only — upstream defers refactoring to the review stage instead of the classic Red-Green-Refactor third beat; that split is upstream's design, kept as-is. The `code-review` skill its body names is upstream's; in this collection that role is Claude Code's built-in `/code-review`._

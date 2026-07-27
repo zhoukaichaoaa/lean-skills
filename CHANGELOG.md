@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.8.0 — 2026-07-27
+
+三名独立审计员并行审查 `a4e3d10`。四个 Critical 全部先复现再修。
+
+**Critical — 升级路径彻底断裂（两名审计员独立发现）。** 0.7.0 引入的所有权标记只在新装时写入，而 0.6.0 及更早版本装的目录**没有标记**。于是对每一位现存用户：`--uninstall` 删 0 个并声称它们"不是我们装的"，随后 `install` 拒绝覆盖 8/9，**退出码 0**，用户静默停留在旧版；改名前的 `code-review/` 原封不动，继续遮蔽内置 `/code-review` —— 0.7.0 的头号卖点对所有老用户完全落空，而 README 给的唯一处方（先卸再装）实测一个文件都不动。
+
+修法：新增 `--adopt` / `-Adopt`，把无标记的同名目录认领为本合集的；默认不认领但**以退出码 3 明确告知**，不再假装成功。同时引入"已退役技能名"清单（目前是 `code-review`）—— 它已不在 `skills/` 里，此前任何循环都碰不到它，`--adopt` 现在会一并清除。
+
+**Critical — Windows 守卫被 junction 指向仓库根整个绕过。** 前缀比较用 `GetFullPath`（不解析 reparse point），canary 只从目标**向上**走 —— 而源在目标之内时 canary 在下方，永远看不见。实测：`CLAUDE_SKILLS_DIR` 设为指向仓库的 junction，**9 个技能目录连同 9 个标记直接写进仓库根**，安装与卸载都不被拒。修法：双向 canary —— 再往目标写一个、从源向上走一遍。8 个向量（含 junction 指向仓库根）复验全部拒绝、仓库零残留。
+
+**Critical — 合并冲突的"操作触及文件"算错。** `git diff HEAD MERGE_HEAD` 包含**本侧**自 merge-base 以来改过的文件，于是用户编辑过、而本次合并根本不碰的文件被误判成"操作自己的改动"，照旧被提交进去。实测：用户改的 `g.txt` 被漏判。改为从 merge-base 起算（`git merge-base HEAD MERGE_HEAD`），rebase/cherry-pick/revert 用 `<REF>^..<REF>`；补上 revert 的 `REVERT_HEAD`。
+
+**Critical — 即使正确识别了用户的文件，照第 6 步做仍会把它们提交。** 技能自己写着"合并提交会带走整个索引"，却没给出纠正动作。新增第 3 步：解决冲突**之前**先 `git restore --staged` 把用户的文件移出索引。实测：修正后合并提交只含冲突文件，用户的 `g.txt`/`u.txt` 仍是未提交状态，完成判据这才成立。
+
+**其余**
+
+- `spec-review`：删掉"内置 `/code-review` 覆盖安全"的说法 —— 官方文档写的是"correctness bugs and reuse, simplification, and efficiency cleanups"，**没有安全**；安全是 `/security-review`。这条错误说法此前还指挥 fork 子代理主动跳过安全审查，等于推荐流水线里安全无人覆盖。同步修 README/NOTICE/implement。
+- `spec-review`：补 `argument-hint` 与 `$ARGUMENTS`（fork 子代理拿不到调用方上下文，参数怎么到手此前全靠未声明的约定）；无 upstream 时的兜底改为 `origin/HEAD` 并在失败时把"缺 base ref"作为整份报告返回（fork 无法向用户提问）；删掉按文件时间判断计划新旧的规则 —— 访谈后只要有一次 `git pull`，正确的计划就会被拒。
+- `worktree`：`git check-ignore -q .worktrees` 在目录尚不存在时**必然返回 1**（带尾斜杠的模式只匹配目录），这个自称承重的闸门每次干净运行都误报，且失败分支不中止。改为探测目录内的路径并真正 `exit 1`。
+- `implement`：补完成判据（全仓库唯一没有的流程型技能）；明确"请用户跑内置 `/code-review`"是请求，不能自己算作完成。
+- 改名遗留：`grill-me`、`receiving-code-review` 的正文/description 仍指向已删除的 `code-review`，`tdd` 的脚注加注说明。
+- 安装器：拒绝相对路径与纯空白的 `CLAUDE_SKILLS_DIR`（此前会静默装进当前目录）；`rmdir -p` 改为只回退自己创建的层级（此前会连带删掉预先存在的空目录，例如刚建好尚未写入的 `~/.claude`）；标记改为校验首行内容而非仅存在；同名**文件**（非目录）也受保护；源不可写时 canary 失效不再静默。
+- CI：新增升级路径断言（9 个无标记目录 + 退役名 → 默认 exit 3 且不覆盖 → `--adopt` 后全部更新且退役名清除）、`jroot` 自身作为目标的向量、空目录残留断言；`dash -n` 此前被 `|| true` 吞掉，恒真。
+- NOTICE 三处词数回填为实测值，`spec-review` 一行改为与同表一致的"上游 → 本仓库"口径；三处 `#skill-locations` 死锚点改为 `#where-skills-live` / `#how-a-skill-gets-its-command-name`；README 的写探针方向此前描述反了（描述的正是 v0.5.0 判定为 bug 的那一版），"重启会话生效"按官方文档收窄为"首次安装才需重启"。
+
+**未采纳**：把 `.plans` 表达式的理由从三处技能里去重（技能各自独立加载，路径本身必须重复，只有理由从句可以省 —— 收益不抵可读性损失）；瘦身 `diagnosing-bugs`（1822 词确实最大，但十种复现构造是分支条件材料，推到指针后会降低它作为盲区拦截器的即时可用性）。
+
 ## 0.7.0 — 2026-07-27
 
 第三方 Claude Code 专项审计（对比 superpowers v6.2.0 与 mattpocock plugin v1.2.0）指出的问题。全部经复现或官方文档核实后才采纳。

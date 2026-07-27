@@ -1,6 +1,6 @@
 ---
 name: receiving-code-review
-description: Use when code-review findings or reviewer feedback arrive — from the user, a PR thread, or the code-review skill — before implementing any of the suggestions.
+description: Use when review findings or reviewer feedback arrive — from the user, a PR thread, spec-review, or Claude Code's built-in /code-review — before implementing any of the suggestions.
 ---
 
 # Receiving Code Review

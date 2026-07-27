@@ -53,7 +53,7 @@ What we deliberately deferred, and what would settle each. An unanswered
 question recorded here is fine; one silently answered on my behalf is not.
 ```
 
-Then show me the document and stop. Building it is `/implement`, which reads this file as its spec — and `code-review` reviews the result against it.
+Then show me the document and stop. Building it is `/implement`, which reads this file as its spec — and `spec-review` checks the result against it.
 
 ## Completion criterion
 
