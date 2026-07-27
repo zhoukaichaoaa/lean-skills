@@ -323,7 +323,21 @@ jobs:
               known = set(resident) | set(manual)
               ghosts = {n for n in listed if '-' in n} - known - {'model-invoked', 'user-invoked', 'lean-skills', 'spec-review'}
               assert not ghosts, f'{path} advertises skills that do not exist: {sorted(ghosts)}'
-          print('ok: 9 skills,', len(resident), 'resident,', len(manual), 'manual; installer lists agree')
+          # NOTICE quotes a word count for every rewritten skill. It has drifted
+          # in five separate releases, so the file is now checked, not trusted.
+          notice = io.open('NOTICE.md', encoding='utf-8').read()
+          claims = {
+              'skills/verification-before-completion/SKILL.md': r'556 . (\d+) .',
+              'skills/receiving-code-review/SKILL.md':          r'894 . (\d+) .',
+              'skills/worktree/SKILL.md':                       r'1064 . (\d+) .',
+              'skills/spec-review/SKILL.md':                    r'1060 . \S+ (\d+) .',
+          }
+          for path, pat in claims.items():
+              m = re.search(pat, notice)
+              assert m, f'NOTICE no longer states a word count for {path}'
+              stated, actual = int(m.group(1)), len(io.open(path, encoding='utf-8').read().split())
+              assert stated == actual, f'NOTICE says {stated} words for {path}, wc -w says {actual}'
+          print('ok: 9 skills,', len(resident), 'resident,', len(manual), 'manual; installer lists and NOTICE counts agree')
           EOF
 
       - name: spec-review's diff recipe captures every change class
@@ -600,7 +614,9 @@ jobs:
           if grep -qx onbase.txt <<<"$(git log --name-only --oneline "$ONTO..HEAD")"; then
             echo "the onto boundary still sweeps in commits already on the base"; exit 1
           fi
-          if ! grep -qx onbase.txt <<<"$(git log --name-only --oneline "$(git rev-parse ORIG_HEAD)..HEAD")"; then
+          OH=$(git rev-parse ORIG_HEAD)
+          test -n "$OH" || { echo "rebase left no ORIG_HEAD to contrast with"; exit 1; }
+          if ! grep -qx onbase.txt <<<"$(git log --name-only --oneline "$OH..HEAD")"; then
             echo "fixture no longer shows why ORIG_HEAD is the wrong boundary"; exit 1
           fi
 
