@@ -27,10 +27,10 @@
 | `verification-before-completion` | 没跑命令就说"修好了" | superpowers，重写 |
 | `receiving-code-review` | 评审说啥都点头照做 | superpowers，重写 |
 | `diagnosing-bugs` | 硬 bug 不建复现回路就开猜；同一个 bug 连修两刀 | mattpocock，微调 |
-| `code-review` | 评审只对着代码规范、不对着"当初要的是什么" | mattpocock，重构（三轴 + 严重度分诊） |
+| `spec-review` | 只查代码规范、不查"当初要的是什么" | mattpocock，收窄为单轴 |
 | `resolving-merge-conflicts` | 冲突了就 `--abort`、随便选一边、或 `git add -A` 把你的 WIP 卷进合并提交 | mattpocock，微调 |
 
-**手动（打斜杠才加载，零上下文成本）**
+**手动（description 不进上下文；正文在你调用时才加载）**
 
 | 技能 | 用途 | 来源 |
 |---|---|---|
@@ -41,7 +41,7 @@
 
 常驻/手动的区分用的是 Claude Code 官方字段 `disable-model-invocation`（[文档](https://code.claude.com/docs/en/skills#control-who-invokes-a-skill)）。官方语义：设为 `true` 时 **description 不进上下文、模型无法调用**，只能由你 `/名字` 触发。
 
-> **`code-review` 常驻的理由与其他四个不同**，如实说明：它的触发点几乎都是用户主动发起的（"审一下这个分支"），不在盲区。它常驻是因为 `implement`（手动技能）必须够得到它 —— **可达性，不是盲区**。想改成手动的话，代价是 `/implement` 的评审环节断掉。
+> **不要与 Claude Code 内置的 `/code-review` 重名。** 官方规则：personal 层的同名技能会**替换掉内置技能**（[文档](https://code.claude.com/docs/en/skills#skill-locations) 举的例子恰好就是 `code-review`）。内置那个自 v2.1.218 起以**独立上下文的后台子代理**运行，覆盖正确性、安全与清理——顶掉它是纯损失。所以本合集把自己的评审技能改名为 `spec-review` 并收窄到内置技能唯一做不到的那一轴：**这改动是不是当初要的东西**（它不知道 `/grill-me` 的计划）。两者配合用，不是二选一。
 >
 > **分层标准（0.3.0）**：常驻的入场券是双重测试 —— **触发点在模型盲区**（正要说"修好了"、批评刚到、同一个 bug 修第二刀：这些瞬间模型不会觉得自己需要被拦），**且内容是护栏而非教材**（Claude 已掌握工程知识本身，技能补的是行为约束，不是重讲一遍软件工程课）。TDD 和开工作区是工作方式的选择，时机该由你掌控 —— 官方文档也把"想控制时机的工作流"归给 `disable-model-invocation`。`implement` 不再跨层调用它们（模型调不到手动技能），改为内联各自的一句话护栏（接缝先约定、纵切、工作区先问再开、基线先绿），完整版留给手动的 `/tdd` 和 `/worktree`。
 >
@@ -86,6 +86,8 @@ cd lean-skills
 /plugin install lean-skills@lean-skills
 ```
 
+插件模式下技能带命名空间：`/lean-skills:implement`。裸名 `/implement` 通常也能用——[除非同名的命令已经存在](https://code.claude.com/docs/en/skills#skill-locations)。本合集没有与内置技能重名的技能（`spec-review` 正是为此从 `code-review` 改名），所以两种写法都可以。
+
 ### 如果你已经装了 superpowers 插件
 
 它带一个 SessionStart hook，每次会话把 `using-superpowers` 全文注入上下文，里面有一条"哪怕只有 1% 可能相关也必须调用技能"。这条规则是为对抗早期模型跳过流程写的，今天的边际收益很低，但 token 成本没降。
@@ -96,9 +98,9 @@ cd lean-skills
 /plugin uninstall superpowers@superpowers-marketplace
 ```
 
-或保留插件，把 `~/.claude/plugins/cache/superpowers-marketplace/superpowers/*/hooks/hooks.json` 改成 `{"hooks":{}}`（注意插件更新会覆盖）。
+插件的 cache 目录是托管的，改里面的 `hooks.json` 会在下次更新时被覆盖，**不要那样做**。想保留 superpowers 的技能又不要它的注入，在 `/plugin` 界面里禁用该插件，再手工挑需要的技能复制到 `~/.claude/skills/`。
 
-装着 mattpocock/skills 插件的话没有 hook 冲突，但会重名：`tdd`、`code-review`、`implement` 等两边都有，模型会同时看到两份 description。建议按需二选一。
+装着 mattpocock/skills 插件的话没有 hook 冲突，命令名也不会真的撞车（插件技能带 `插件名:` 命名空间）。真正的代价是**语义重叠**：`tdd`、`implement` 等两边都有用途相近的 description，模型每轮都要在两套里选，上下文和选择面都变大。建议按需二选一。
 
 ## 用法
 
@@ -114,7 +116,7 @@ cd lean-skills
 
 常驻的 5 个不需要你操心 —— 它们会在该出现的时候自己出现（评审反馈到来时 `receiving-code-review` 自动接手；`git pull` 撞上冲突时 `resolving-merge-conflicts` 自动接手）。
 
-**装完先做个冒烟测试**：新开一个会话，敲 `/`，应当看到 `grill-me`、`implement`、`tdd`、`worktree` 四个手动技能（常驻的 5 个不出现在斜杠列表里是正常的）。看不到就是没装上或没重启会话。
+**装完先做个冒烟测试**：新开一个会话，敲 `/`，**九个技能应当全部出现**。`disable-model-invocation` 只阻止模型自动调用，[不隐藏斜杠菜单](https://code.claude.com/docs/en/skills#control-who-invokes-a-skill)——想让某个技能从菜单消失，得另加 `user-invocable: false`。看不到就是没装上或没重启会话。
 
 **不想要某一个**：`rm -rf ~/.claude/skills/<名字>` 即可，但下次 `./install.sh` 会把它装回来 —— 长期不要就从你的 fork 里删掉那个目录。
 
@@ -127,14 +129,16 @@ cd lean-skills
   → 按计划里约定的接缝纵切：一个失败测试 → 刚好通过的实现 → 重复
   → typecheck / 单文件测试跑着，最后跑全量
   → verification-before-completion：每个结论都带命令输出，计划里每条决策都有交代
-  → code-review：Correctness / Spec / Standards 三轴并行（含未提交 WIP），按严重度分诊
+  → spec-review（forked 子代理）：这改动是不是计划要的东西
+  → 请你跑内置 /code-review：正确性、安全、清理
   → receiving-code-review：逐条核实评审发现再动手
+  → 改完再验一遍：修 finding 会让上一步的证据失效
   → 交付：diff 摆出来，你点头才 commit
 ```
 
 ### 为什么计划是这套流程的枢纽
 
-`/grill-me` 只留下"我们聊明白了"的感觉，会话一结束就蒸发。更要命的是 **`code-review` 的 Spec 轴会因此空转** —— 它按顺序找 spec（用户给的路径 → commit 里的 issue 号 → `docs/` 下的文件），本地开发这些通常一个都不存在，问过用户之后 Spec 子代理被跳过，三轴退化成两轴，"做的是不是当初要的东西"这条线断掉。
+`/grill-me` 只留下"我们聊明白了"的感觉，会话一结束就蒸发。更要命的是**没有计划，`spec-review` 就无事可做** —— 它找 spec 的顺序是：调用者给的路径 → commit 里的 issue 号 → 计划文件 → `docs/` 下的 spec。本地开发前三项通常一个都没有，于是它只能报告"无 spec"然后停下（凭 diff 反推 spec 等于拿改动审自己）。而内置 `/code-review` 再强也回答不了"这是不是当初要的东西"——它没见过那场访谈。
 
 书面计划一次接通三条轨道：
 
@@ -142,9 +146,9 @@ cd lean-skills
 |---|---|
 | `implement` | Decisions 照着建，Seams 决定测在哪（第 6 步前重读一遍——长任务里它早被压缩掉了） |
 | `verification-before-completion` | 逐条核对"每个决策是否有交代"——测试通过只证明代码能跑，不证明它是被要求的那个代码 |
-| `code-review` 的 Spec 轴 | 终于有 spec 可对；Out of scope 一节让范围蔓延在评审里现形 |
+| `spec-review` | 终于有 spec 可对；Out of scope 一节让范围蔓延现形 |
 
-计划写在 **`$(git rev-parse --git-common-dir)/../.plans`** —— 这个表达式在主检出和 linked worktree 里都指向主检出。直接写 `.plans/` 会踩一个坑：未跟踪文件**不会**进入 linked worktree，而 exclude 规则会，于是"先 `/worktree` 再 `/implement`"的推荐流程里，计划在 worktree 内找不到，Spec 轴又退回空转。三处（写、读、评审）用的是同一条表达式，改位置要三处一起改。
+计划写在 **`$(git rev-parse --git-common-dir)/../.plans`** —— 这个表达式在主检出和 linked worktree 里都指向主检出。直接写 `.plans/` 会踩一个坑：未跟踪文件**不会**进入 linked worktree，而 exclude 规则会，于是"先 `/worktree` 再 `/implement`"的推荐流程里，计划在 worktree 内找不到，Spec 轴又退回空转。三处（`grill-me` 写、`implement` 读、`spec-review` 找）用的是同一条表达式，改位置要三处一起改。非 git 目录下退化为当前目录的 `.plans/`。
 
 不自动提交 —— 和本合集其他地方一样，提交是你的决定。用完记得 `git worktree remove`：worktree 和计划都被 exclude，**永远不出现在 `git status` 里**，不会有人提醒你它们在堆积。
 

@@ -18,9 +18,14 @@ If a *fact* can be found by exploring the environment (filesystem, git history, 
 
 ## 2. The plan
 
-Write the resolved tree to `<plans>/<slug>.md`, where **`<plans>` is `$(git rev-parse --git-common-dir)/../.plans`** and the slug names the feature. That expression resolves to the main checkout's `.plans/` from anywhere — including inside a linked worktree, which an untracked `.plans/` never gets copied into. `/implement` and `code-review` look it up the same way; a plan somewhere else is a plan they will not find, so move it only if you also tell them where.
+Write the resolved tree to `<plans>/<slug>.md`, where the slug names the feature and `<plans>` is:
 
-Keep it out of git's way by appending `.plans/` to `$(git rev-parse --git-common-dir)/info/exclude` — check the line isn't already there first. Outside a git repository, skip the exclude and just write the file. Do not commit it; that is my call, and if I want it shared, ask whether it belongs in `.gitignore` or in `docs/`.
+- in a git repository: **`$(git rev-parse --git-common-dir)/../.plans`** — that resolves to the main checkout's `.plans/` from anywhere, including inside a linked worktree, which an untracked `.plans/` never gets copied into;
+- outside one: `.plans/` in the current directory.
+
+`/implement` and `spec-review` look it up the same way; a plan somewhere else is a plan they will not find, so move it only if you also tell them where.
+
+In a git repository, keep it out of the way by appending `.plans/` to `$(git rev-parse --git-common-dir)/info/exclude` — check the line isn't already there first. Outside one, skip that step. Do not commit it; that is my call, and if I want it shared, ask whether it belongs in `.gitignore` or in `docs/`.
 
 If the file already exists, ask whether to replace it or start a new slug. Report the path you wrote to.
 

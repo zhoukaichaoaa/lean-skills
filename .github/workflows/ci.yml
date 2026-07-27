@@ -71,9 +71,15 @@ jobs:
           T="$RUNNER_TEMP/skills dir"            # spaces in the path
           CLAUDE_SKILLS_DIR="$T" ./install.sh -y >/dev/null && install_ok "$T"
           mkdir -p "$T/not-ours" && : > "$T/not-ours/SKILL.md"
+          # a skill of the user's that happens to share one of our names
+          mkdir -p "$T/tdd-user-check" && : > "$T/tdd-user-check/SKILL.md"
+          rm -rf "$T/tdd" && mkdir -p "$T/tdd" && echo USER-OWNED > "$T/tdd/SKILL.md"
+          CLAUDE_SKILLS_DIR="$T" ./install.sh -y >/dev/null
+          grep -q USER-OWNED "$T/tdd/SKILL.md"                  # install must not clobber it
           CLAUDE_SKILLS_DIR="$T" ./install.sh --uninstall >/dev/null
           test -f "$T/not-ours/SKILL.md"                       # a foreign skill survives
-          test "$(find "$T" -name SKILL.md | wc -l)" -eq 1      # ours are gone
+          grep -q USER-OWNED "$T/tdd/SKILL.md"                  # ...including a same-named one
+          test "$(find "$T" -name SKILL.md | wc -l)" -eq 3      # ours are gone, three of theirs remain
           test -z "$(git status --porcelain)"
 
       - name: install.ps1
@@ -161,6 +167,7 @@ jobs:
               (manual if re.search(r'^disable-model-invocation:\s*true', fm, re.M)
                       else resident).append(d)
           assert len(resident) == 5 and len(manual) == 4, (resident, manual)
+          assert 'code-review' not in resident + manual, 'never shadow the built-in /code-review'
           # the installers and the plugin blurb restate these lists; keep them honest
           for path in ('install.sh', 'install.ps1'):
               blob = io.open(path, encoding='utf-8').read()
@@ -181,12 +188,12 @@ jobs:
           set -euo pipefail
           # Anchor on the skill text: if the recipe in SKILL.md changes, this test
           # must be revisited rather than silently keep testing a stale command.
-          S=skills/code-review/SKILL.md
-          grep -q 'BASE_SHA=$(git merge-base <fixed-point> HEAD)' "$S"
-          grep -q 'git diff <BASE_SHA>' "$S"
-          grep -q 'git log <BASE_SHA>..HEAD --oneline' "$S"
+          S=skills/spec-review/SKILL.md
+          grep -q 'git merge-base <base-ref> HEAD' "$S"
+          grep -q 'git diff <that-literal-sha>' "$S"
+          grep -q 'git log <that-literal-sha>..HEAD --oneline' "$S"
           grep -q 'git status --porcelain' "$S"
-          grep -q 'literal SHA' "$S"
+          grep -q 'printed SHA' "$S"
 
           R="$RUNNER_TEMP/fixture"; rm -rf "$R"; git init -q "$R"; cd "$R"
           git config user.email ci@ci; git config user.name ci

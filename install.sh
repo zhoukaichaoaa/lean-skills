@@ -90,18 +90,29 @@ else
   echo "cannot write to target $dest_abs" >&2; exit 1
 fi
 
+# Every directory we install carries this marker. Uninstall removes only the
+# directories that have it, so a skill of your own that happens to share a name
+# with one of ours survives.
+marker=.lean-skills
+
 if [ "$mode" = uninstall ]; then
   removed=0
+  spared=0
   for dir in "$src"/*/; do
     name=$(basename "$dir")
     if [ -e "$dest_abs/$name" ]; then
-      rm -rf "${dest_abs:?}/$name"
-      echo "  removed   $name"
-      removed=$((removed + 1))
+      if [ -f "$dest_abs/$name/$marker" ]; then
+        rm -rf "${dest_abs:?}/$name"
+        echo "  removed   $name"
+        removed=$((removed + 1))
+      else
+        echo "  kept      $name (not installed by lean-skills)"
+        spared=$((spared + 1))
+      fi
     fi
   done
   echo
-  echo "$removed removed from $dest_abs — only this collection's skills; anything else was left alone."
+  echo "$removed removed from $dest_abs; $spared left in place because they are not ours."
   exit 0
 fi
 
@@ -116,6 +127,14 @@ warned=0
 
 for dir in "$src"/*/; do
   name=$(basename "$dir")
+
+  # A directory without our marker belongs to the user, whatever it is called.
+  # Never replace it, even with -y.
+  if [ -d "$dest_abs/$name" ] && [ ! -f "$dest_abs/$name/$marker" ]; then
+    echo "  kept      $name (yours, not ours — install elsewhere with CLAUDE_SKILLS_DIR)" >&2
+    kept=$((kept + 1))
+    continue
+  fi
 
   if [ -e "$dest_abs/$name" ] && [ "$assume_yes" -eq 0 ]; then
     reply=''
@@ -139,6 +158,7 @@ for dir in "$src"/*/; do
   cp -R "${dir%/}" "$staging"
   rm -rf "${dest_abs:?}/$name"
   mv "$staging" "$dest_abs/$name"
+  echo "installed by lean-skills; uninstall removes only directories carrying this file" > "$dest_abs/$name/$marker"
   echo "  installed $name"
   installed=$((installed + 1))
 done

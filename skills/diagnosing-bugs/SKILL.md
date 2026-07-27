@@ -127,13 +127,13 @@ If a correct seam exists:
 2. Watch it fail.
 3. Apply the fix.
 4. Watch it pass.
-5. Re-run the Phase 1 feedback loop against the original (un-minimised) scenario.
+5. Re-run the Phase 1 feedback loop against the original (un-minimised) scenario — on the artifact path, instead check the fix against every artifact that showed the symptom.
 
 ## Phase 6 — Cleanup + post-mortem
 
 Required before declaring done:
 
-- [ ] Original repro no longer reproduces (re-run the Phase 1 loop)
+- [ ] Original repro no longer reproduces (re-run the Phase 1 loop). **On the artifact path there is no loop to re-run** — instead: the regression test passes, the fix accounts for every symptom the artifacts show, and the report states plainly that the original incident was never reproduced live, so nobody reads this as confirmed-in-situ.
 - [ ] Regression test passes (or absence of seam is documented)
 - [ ] All `[DEBUG-...]` instrumentation removed (`grep` the prefix)
 - [ ] Throwaway prototypes deleted (or moved to a clearly-marked debug location)

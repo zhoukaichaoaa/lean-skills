@@ -36,6 +36,8 @@ You may make the claim once you can quote, in the same message, the command you 
 
 Until then, report the real state: what changed, what you have not run yet, what you expect to happen.
 
+For user-visible behaviour, a green test suite is evidence that the tests pass, not that the feature works. Exercise it — run the app, hit the endpoint, click the thing — or hand that to Claude Code's built-in `/verify`.
+
 ## When evidence is out of reach
 
 Name the command you would run and why you can't (no network, needs a device, needs credentials), then report the work as unverified. An honest "unverified" costs the reader one command to settle; a confident guess costs them the whole debugging session that follows.

@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.7.0 — 2026-07-27
+
+第三方 Claude Code 专项审计（对比 superpowers v6.2.0 与 mattpocock plugin v1.2.0）指出的问题。全部经复现或官方文档核实后才采纳。
+
+**Critical —— 卸载器会删掉用户自己的同名技能。** README 声称"只移除本合集的 9 个技能，你自己创建的技能不动"，实际只按目录名删除。实测：用户自己写的 `~/.claude/skills/tdd/` 被整个删除，同时脚本打印"anything else was left alone" —— 数据丢失加假陈述。现在每个安装目录写入 `.lean-skills` 标记，卸载只删带标记的；没有标记的同名目录**安装时也不覆盖**（即使 `-y`），并明确告知。CI 新增该场景断言。
+
+**Critical —— 合并冲突可能把用户的暂存工作卷进合并提交。** 原规则「`git status --porcelain` 首列为空 = 用户的 WIP」只能识别未暂存改动。实测确认：干净开始 → 冲突 → 冲突进行中暂存了无关文件 → `git commit` 把它写进了双 parent 的合并提交，而首列是 `A` 的它不被规则识别。改为「已暂存文件 − 本次操作触及的文件」（`git diff --cached --name-only HEAD` 减去 `git diff --name-only HEAD MERGE_HEAD`），实测能正确挑出。同时区分四种操作各自的收尾命令 —— 原文统一写成"stage and commit"，而 rebase 要 `--continue`、cherry-pick 要 `--continue`、revert 要 `--continue`。
+（审计原文举的"合并前就已 staged"场景，实测 git 自己会拒绝开始合并并报 exit 2；真正可复现的是冲突进行中新暂存的情形，此处按后者修。）
+
+**`code-review` 改名为 `spec-review` 并收窄为单轴。** 官方文档：personal 层的同名技能会**替换掉内置技能**，举的例子恰好就是 `code-review`。而内置的那个自 v2.1.218 起以**独立上下文的后台子代理**运行，覆盖正确性、安全、reuse/simplification/efficiency 清理 —— 手动安装本合集等于把它顶掉，纯损失。本技能因此只保留内置做不到的那一轴：**这改动是不是当初计划要的东西**（内置不知道 `/grill-me` 的计划）。Fowler smell 基线整块删除（那是教材，且内置已覆盖），加 `context: fork` + `background: false`，1581 → 656 词。`/implement` 现在先跑 `spec-review`，再请用户跑内置 `/code-review`。
+
+**其余修正**
+
+- `implement` 新增第 8 步：**修完评审 finding 后重跑验证**。修一条 finding 就让第 6 步的测试/构建证据失效 —— 它们描述的是已经不存在的代码。用户可见行为要实际操作，或交给内置 `/verify`。
+- `spec-review`：`BASE_SHA=$(...)` 这种写法根本不打印 SHA，而下一句要求记录字面 SHA；改为直接运行 `git merge-base` 并读它打印的值。
+- `grill-me`：非 git 目录下 `$(git rev-parse --git-common-dir)` 会失败，补上退化路径（当前目录的 `.plans/`）。
+- `diagnosing-bugs`：artifact 路径此前与 Phase 5/6 的"重跑原始复现"互相矛盾，补上该路径独有的完成条件（回归测试通过 + 修复覆盖 artifacts 显示的每个症状 + 报告注明未在线复验）。
+- `verification-before-completion`：补一句 —— 用户可见行为的绿色测试只证明测试通过，不证明功能可用；实际操作它，或用内置 `/verify`。
+- README：**斜杠菜单的说明此前是错的** —— `disable-model-invocation` 不隐藏菜单，九个技能全部出现在 `/` 里；要隐藏得另加 `user-invocable: false`。冒烟测试据此更正。
+- README：**不再建议修改 superpowers 插件 cache 里的 `hooks.json`** —— 那是托管目录，更新会覆盖；改为在 `/plugin` 界面禁用。
+- README："手动技能零上下文成本"改为"description 不进上下文，正文在调用时才加载"；与 mattpocock 的关系从"重名"更正为"语义重叠"（插件技能有命名空间，不会真的撞名）；补插件模式的 `/lean-skills:*` 命令写法。
+
+**未采纳**：改用 plugin-only 发行（手动安装对不想装插件的用户仍有价值，且改名后不再顶掉任何内置技能，两种模式的命令名现在都能用）；给三个技能加 `user-invocable: false`（它们都还算合理的手动动作，隐藏菜单收益不抵可发现性损失——需要的人可自行加）。
+
 ## 0.6.0 — 2026-07-27
 
 **`/grill-me` 现在产出书面计划。** 此前它止于"我们聊明白了"，会话一结束决策就蒸发。真正的代价不止是没记录 —— **`code-review` 的 Spec 轴因此在本地开发中长期空转**：它按顺序找 spec（用户给的路径 → commit 里的 issue 号 → `docs/`/`specs/` 下的文件），一次典型的本地开发这些一个都不存在，于是整个 Spec 子代理被跳过，三轴评审退化成两轴。
