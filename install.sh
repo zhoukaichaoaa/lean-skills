@@ -50,8 +50,20 @@ if [ "${CLAUDE_SKILLS_DIR+set}" = set ]; then
     *[![:blank:]]*) : ;;
     *) echo "CLAUDE_SKILLS_DIR is set but blank — unset it for the default, or give it a path" >&2; exit 2 ;;
   esac
+  # `C:/skills` is absolute under Git Bash, MSYS and Cygwin, and a *relative*
+  # path called "C:" everywhere else - accepting it on Linux would create a
+  # directory named C: in the current one. Ask the platform, do not assume.
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) drive_letters_are_absolute=1 ;;
+    *)                    drive_letters_are_absolute=0 ;;
+  esac
   case "$CLAUDE_SKILLS_DIR" in
-    /*|[A-Za-z]:[\\/]*) : ;;
+    /*) : ;;
+    [A-Za-z]:[\\/]*)
+      [ "$drive_letters_are_absolute" -eq 1 ] || {
+        echo "CLAUDE_SKILLS_DIR must be an absolute path; '$CLAUDE_SKILLS_DIR' is a drive-letter path, which is relative on $(uname -s)" >&2
+        exit 2
+      } ;;
     *) echo "CLAUDE_SKILLS_DIR must be an absolute path (got: '$CLAUDE_SKILLS_DIR')" >&2; exit 2 ;;
   esac
 fi
@@ -132,6 +144,12 @@ fi
 # Every directory we install carries this marker, with this exact first line.
 # Uninstall removes only directories that have it, so a skill of your own that
 # happens to share a name with one of ours survives.
+# `-e` follows the link and answers about the *target*, so a symlink whose
+# target is missing - an unmounted disk, a moved directory - reads as "nothing
+# here". Every decision about the user's property has to see the link itself,
+# or the install replaces it without ever consulting the ownership marker.
+exists() { [ -e "$1" ] || [ -L "$1" ]; }
+
 marker=.lean-skills
 # Anything interrupted mid-swap leaves scratch directories behind. Claude Code
 # loads every directory under the skills root, so an orphaned one would show up
@@ -145,7 +163,7 @@ cleanup() {
   [ -n "${dest_abs:-}" ] || return 0
   _staging=$dest_abs/.lean-skills-staging-$$
   _outgoing=$dest_abs/.lean-skills-outgoing-$$
-  if [ -n "$swap_target" ] && [ -d "$_outgoing" ] && [ ! -e "$swap_target" ]; then
+  if [ -n "$swap_target" ] && [ -d "$_outgoing" ] && ! exists "$swap_target"; then
     if mv "$_outgoing" "$swap_target" 2>/dev/null; then
       echo "  restored  ${swap_target##*/} (install did not finish)" >&2
     else
@@ -186,7 +204,7 @@ if [ "$mode" = uninstall ]; then
 '
   for name in $(for d in "$src"/*/; do basename "$d"; done; printf '%s\n' "$retired"); do
     IFS=$old_ifs
-    [ -e "$dest_abs/$name" ] || continue
+    exists "$dest_abs/$name" || continue
     if is_ours "$dest_abs/$name" || [ "$adopt" -eq 1 ]; then
       rm -rf "${dest_abs:?}/$name"
       echo "  removed   $name"
@@ -227,17 +245,17 @@ for dir in "$src"/*/; do
   # Anything at our name without our marker is either yours or a pre-0.7.0
   # install of ours. We cannot tell, so we do not guess: keep it unless --adopt.
   adopting=0
-  if [ -e "$dest_abs/$name" ] && ! is_ours "$dest_abs/$name" && [ "$adopt" -eq 1 ]; then
+  if exists "$dest_abs/$name" && ! is_ours "$dest_abs/$name" && [ "$adopt" -eq 1 ]; then
     adopting=1
   fi
-  if [ -e "$dest_abs/$name" ] && ! is_ours "$dest_abs/$name" && [ "$adopt" -eq 0 ]; then
+  if exists "$dest_abs/$name" && ! is_ours "$dest_abs/$name" && [ "$adopt" -eq 0 ]; then
     echo "  kept      $name (no ownership marker)"
     kept=$((kept + 1))
     unmarked=$((unmarked + 1))
     continue
   fi
 
-  if [ -e "$dest_abs/$name" ] && [ "$assume_yes" -eq 0 ]; then
+  if exists "$dest_abs/$name" && [ "$assume_yes" -eq 0 ]; then
     reply=''
     if [ "$have_tty" -eq 1 ]; then
       printf 'overwrite existing %s? [y/N] ' "$name" >&2
@@ -266,7 +284,7 @@ for dir in "$src"/*/; do
   outgoing=$dest_abs/.lean-skills-outgoing-$$
   rm -rf "$outgoing"
   swap_target=$dest_abs/$name          # the window opens here
-  [ -e "$dest_abs/$name" ] && mv "$dest_abs/$name" "$outgoing"
+  exists "$dest_abs/$name" && mv "$dest_abs/$name" "$outgoing"
   mv "$staging" "$dest_abs/$name"
   swap_target=''                       # ...and closes only once the new copy is in place
   rm -rf "$outgoing"
@@ -280,7 +298,7 @@ IFS='
 '
 for name in $retired; do
   IFS=$old_ifs
-  [ -e "$dest_abs/$name" ] || continue
+  exists "$dest_abs/$name" || continue
   if is_ours "$dest_abs/$name" || [ "$adopt" -eq 1 ]; then
     rm -rf "${dest_abs:?}/$name"
     echo "  retired   $name (no longer part of this collection)"

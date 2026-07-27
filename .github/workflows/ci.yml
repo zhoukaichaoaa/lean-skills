@@ -149,6 +149,33 @@ jobs:
           test -z "$(find "$Sp/t" -mindepth 1 -maxdepth 1 -type d)" \
             || { echo "uninstall could not remove a space-named skill: $(find "$Sp/t" -mindepth 1 -maxdepth 1 -type d)"; exit 1; }
 
+          # A drive-letter path is absolute under Git Bash and *relative* on Linux
+          # and macOS, where accepting it creates a directory literally called "C:".
+          case "$(uname -s)" in
+            MINGW*|MSYS*|CYGWIN*) ;;
+            *)
+              set +e; CLAUDE_SKILLS_DIR='C:/skills' ./install.sh -y >/dev/null 2>&1; rc=$?; set -e
+              test "$rc" -eq 2 || { echo "a drive-letter path should exit 2 on $(uname -s), got $rc"; exit 1; }
+              test ! -e 'C:' || { echo 'a directory named C: was created'; exit 1; }
+              test -z "$(git status --porcelain)" || { echo "repo dirty after the drive-letter attempt"; exit 1; }
+              ;;
+          esac
+
+          # A symlink whose target is missing - an unmounted disk, a moved directory -
+          # answers false to `-e`, so every "is something already here?" test used to
+          # miss it and the install replaced it without consulting the marker.
+          Bl="$RUNNER_TEMP/broken"; mkdir -p "$Bl"
+          ln -s "$Bl/nowhere" "$Bl/tdd"
+          test ! -e "$Bl/tdd" && test -L "$Bl/tdd"     # this is the shape being guarded
+          set +e; CLAUDE_SKILLS_DIR="$Bl" ./install.sh -y >/dev/null 2>&1; rc=$?; set -e
+          test -L "$Bl/tdd" || { echo "a broken symlink at our name was replaced"; exit 1; }
+          test "$rc" -eq 3 || { echo "keeping a broken symlink should exit 3, got $rc"; exit 1; }
+          CLAUDE_SKILLS_DIR="$Bl" ./install.sh --uninstall >/dev/null 2>&1 || true
+          test -L "$Bl/tdd" || { echo "uninstall removed a broken symlink that is not ours"; exit 1; }
+          # ...and --adopt is still able to take it over, deliberately
+          CLAUDE_SKILLS_DIR="$Bl" ./install.sh -y --adopt >/dev/null 2>&1
+          test -f "$Bl/tdd/SKILL.md" || { echo "--adopt could not take over a broken symlink"; exit 1; }
+
           # a relative target is refused, and writes nothing
           set +e; CLAUDE_SKILLS_DIR=rel/here ./install.sh -y >/dev/null 2>&1; rc=$?; set -e
           test "$rc" -eq 2 || { echo "relative CLAUDE_SKILLS_DIR should exit 2, got $rc"; exit 1; }
@@ -445,6 +472,19 @@ jobs:
           }
           if (-not (Test-Path -LiteralPath (Join-Path $F 'worktree') -PathType Leaf)) { throw "destroyed a non-directory at our name" }
 
+          # IsPathRooted says yes to `C:relative` (relative to the current directory
+          # *on drive C:*) and to a single leading separator (relative to the current
+          # drive). Neither is a path the caller named.
+          foreach ($bad in @('C:relative-target', ([char]92 + 'single-leading'))) {
+            $env:CLAUDE_SKILLS_DIR = $bad
+            $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+            & powershell -NoProfile -File .\install.ps1 -Yes *> $null
+            $rc = $LASTEXITCODE
+            $ErrorActionPreference = $prevEAP
+            if ($rc -ne 2) { throw "drive-relative '$bad' should exit 2, got $rc" }
+          }
+          $env:CLAUDE_SKILLS_DIR = $null
+
           # the same exit-code contract as install.sh - a caller cannot branch on
           # "it refused" if the two platforms answer differently
           # these calls are supposed to fail; suspend Stop so a native command's
@@ -734,7 +774,7 @@ jobs:
           # combined test can fail without failing the step
           test -s "$RUNNER_TEMP/mc-cmds.txt"
           test -s "$RUNNER_TEMP/sr-cmds.txt"
-          for want in 'merge-base --all HEAD <that head>' 'REBASE_HEAD^<n> REBASE_HEAD'                       'CHERRY_PICK_HEAD^<n> CHERRY_PICK_HEAD' 'REVERT_HEAD^<n> REVERT_HEAD'                       'git stash push -u --' 'git restore --staged --' 'name-status -M' 'MERGE_HEAD"'                       'hash-object -t tree'; do
+          for want in 'merge-base --all HEAD <that head>' 'REBASE_HEAD^<n> REBASE_HEAD'                       'CHERRY_PICK_HEAD^<n> CHERRY_PICK_HEAD' 'REVERT_HEAD^<n> REVERT_HEAD'                       'rev-list --parents -n 1' 'git checkout -- ' 'git restore --staged --' 'name-status -M' 'MERGE_HEAD"'                       'hash-object -t tree'; do
             grep -qF "$want" "$RUNNER_TEMP/mc-cmds.txt" || { echo "not prescribed in a code block: $want"; exit 1; }
           done
           for want in 'cat-file -e' 'refs/heads/<default>:refs/remotes/origin/<default>' 'ls-remote --symref'; do
@@ -752,10 +792,11 @@ jobs:
           # a bare `git stash push` here would be step 4's own trap in a new
           # command: the paths it names were just untracked, and a single
           # untracked path fails the whole command rather than skipping it
-          stash_cmds=$(grep -E '^ *git stash push' "$RUNNER_TEMP/mc-cmds.txt" || true)
-          test -n "$stash_cmds" || { echo "the rebase parking recipe vanished"; exit 1; }
-          bare_stash=$(grep -vF -- ' -u ' <<<"$stash_cmds" || true)
-          test -z "$bare_stash" || { echo "git stash push lost its -u:$bare_stash"; exit 1; }
+          # `git stash` cannot park work during a rebase: a stash records the whole
+          # index, so it carries the conflict resolution, replays it after the rebase
+          # and manufactures a fresh conflict - and popping mid-rebase fails outright.
+          stash_cmds=$(grep -E '^ *git stash' "$RUNNER_TEMP/mc-cmds.txt" || true)
+          test -z "$stash_cmds" || { echo "the skill prescribes git stash again:$stash_cmds"; exit 1; }
 
           # prose-level anchors: these are warnings, not commands, so they live
           # outside the fenced blocks the loop above checks

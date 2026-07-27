@@ -51,7 +51,13 @@ $srcDirs = @(Get-ChildItem -Directory -LiteralPath $srcAbs)
 # so the set-but-empty case install.sh guards against cannot arise here.)
 if ($env:CLAUDE_SKILLS_DIR) {
   if (-not $env:CLAUDE_SKILLS_DIR.Trim()) { Deny "CLAUDE_SKILLS_DIR is set but blank - unset it for the default, or give it a path" }
-  if (-not [IO.Path]::IsPathRooted($env:CLAUDE_SKILLS_DIR)) {
+  # IsPathRooted is not "is absolute": it says yes to `C:relative`, which is
+  # relative to whatever the process's current directory on C: happens to be,
+  # and to a single leading separator, which is relative to the current drive.
+  # Require a drive plus a separator, or a UNC path.
+  $d = $env:CLAUDE_SKILLS_DIR
+  $isAbsolute = ($d -match '^[A-Za-z]:[\\/]') -or ($d -match '^[\\/][\\/][^\\/]')
+  if (-not $isAbsolute) {
     Deny "CLAUDE_SKILLS_DIR must be an absolute path (got: '$env:CLAUDE_SKILLS_DIR')"
   }
 }

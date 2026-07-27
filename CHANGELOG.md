@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.13.1 — 2026-07-28
+
+第五份第三方审计，5 条发现。**4 条成立**，1 条只对了一半；另外我在复现过程中发现问题比审计描述的更深，最后的修法和它建议的不一样。
+
+**多提交 rebase 连续冲突时，停靠的工作取不回来（P1）**
+
+夹具：被 rebase 的分支有两个提交、都冲突。按 0.12.0 写的流程 `stash push → rebase --continue → stash pop`：
+
+```
+rebase --continue exit=1        # 停在第二个冲突，索引是 UU
+git stash pop     exit=1        # error: could not write index
+user.txt 恢复了吗: NO
+```
+
+**但审计建议的修法我也验失败了** —— 记住 stash 的 OID、等 rebase 全部结束再 `apply`，同样 exit=1。继续挖才看清根因：
+
+```
+git stash push -- tracked.txt   # 只点名一个文件
+git stash show --name-only      # [f.txt tracked.txt]   <- 冲突解决也进去了
+```
+
+**`git stash` 在这里根本是错的工具**：stash 总会记录**整个索引**，而冲突进行中的索引里装着你刚暂存的冲突解决。等 rebase 结束再 pop，它会把那份**过期的解决**重放到已经 rebase 过的文件上，凭空造出一个 `UU` 冲突；而且文件回来是**已暂存**状态，不是第 4 步留下的未暂存状态。
+
+改为不碰索引：把内容复制到 `.git/lean-parked/`，`git checkout --` 清干净工作区，整个 rebase 结束后再复制回去。同一夹具对比：
+
+| | 停靠方式 | 取回后 status | 额外冲突 |
+|---|---|---|---|
+| 旧 | `git stash` | `UU f.txt` + `M  tracked.txt`（已暂存） | 有 |
+| 新 | 复制到 `.git` 下 | ` M tracked.txt`（未暂存，正确） | 无 |
+
+**顺带纠正 0.12.0 自己的一个误判**：那一版给 `stash push` 加 `-u`，理由是"第 4 步之后新文件变成 untracked，裸 push 会整条失败"。实测 **untracked 文件根本不挡 `rebase --continue`，也不会被它提交** —— 当初就不该把它们停靠。现在只停靠 tracked 的未暂存修改。
+
+**root commit 冲突时 `^<n>` 不存在（#5）**
+
+`git rebase --root` 让 root commit 冲突时，`REBASE_HEAD` 正确指向它，但它没有父提交，`REBASE_HEAD^1` **exit 128**，技能算不出这次操作带来了什么。改为先 `git rev-list --parents -n 1 <REF>` 数父提交：0 个用空树、1 个用 `^1`、多个要问用户 `-m`。
+
+**Windows 安装器接受驱动器相对路径（#2）**
+
+`[IO.Path]::IsPathRooted()` 不是"是否绝对路径"：
+
+```
+C:relative-target   rooted=True     GetFullPath -> C:\relative-target
+\single-leading     rooted=True
+```
+
+前者相对于**进程在 C 盘的当前目录**，后者相对于**当前驱动器** —— 都不是调用者指定的位置。改为要求"盘符 + 分隔符"或合法 UNC。
+
+**POSIX 安装器把 Windows 路径当绝对路径（#3，半条成立）**
+
+`C:/skills` 在 Git Bash / MSYS / Cygwin 下确实是绝对路径，在 Linux/macOS 下是**相对路径**，会在当前目录建出一个名叫 `C:` 的目录。改为用 `uname -s` 判平台，非 Windows 环境只接受以 `/` 开头的路径。
+
+审计还说 `C:relative` 也被接受 —— **这半句不成立**，实测 exit=2。shell 的 `case` 模式里 `[\\/]` 是一个字符类而不是"零或多个"，分隔符本来就是必需的。
+
+**断裂的 symlink 会被覆盖（#4）**
+
+`[ -e "$target" ]` 跟随链接、回答的是**目标**存在与否。技能目录若是指向未挂载磁盘或已移动位置的 symlink，`-e` 为假，于是"无所有权标记就保留"这道守卫被整个跳过，链接被直接替换、也不做备份。
+
+这条**我本机复现不了**（Git Bash 造不出真 symlink，`ln -s` 直接失败），但代码路径是确定的：`install.sh:233` 的守卫、`:240` 的询问、`:269` 的备份三处都挂在 `[ -e ]` 上。新增 `exists()`（`-e` 或 `-L`），7 处判定全部改用它。CI 在 Linux 与 macOS 腿上新增真实断裂链接的装/卸/adopt 三段验证 —— 这条只能由 CI 证明。
+
+**CI**
+
+新增：非 Windows 平台拒绝驱动器路径且不得建出 `C:` 目录；Windows 拒绝 `C:relative` 与单前导分隔符；断裂 symlink 的默认保留（exit 3）、卸载不删、`--adopt` 才接管；技能正文里**不得再出现 `git stash`**；配方锚点改为 `rev-list --parents -n 1` 与 `git checkout -- `。
+
+**验证**：CI 的 9 条 run-step 里 8 条在干净克隆上实跑（含 Windows）；`tests/mutations.py` 32/32。断裂 symlink 一段本机无法执行，由 CI 的两条 POSIX 腿覆盖。
+
 ## 0.13.0 — 2026-07-28
 
 **退出码在两个平台上不一致**

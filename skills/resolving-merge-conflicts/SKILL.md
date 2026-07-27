@@ -61,7 +61,17 @@ Run every command below and **read what it printed**. Two shapes account for eve
    git -c core.quotePath=false diff --name-status -M REVERT_HEAD^<n> REVERT_HEAD
    ```
 
-   `<n>` is the mainline: `1` for an ordinary commit, and for a merge commit the `-m` the operation was given. Run only the row you matched; the others name refs that do not exist and fail loudly with `fatal: ambiguous argument`. On a revert the status letters are inverted — an `A` means the revert *removes* that path — so read the paths, not the letters.
+   **Count the parents before you pick `<n>`** — `git rev-list --parents -n 1 <REF>` prints the commit followed by its parents:
+
+   ```bash
+   git rev-list --parents -n 1 <REF>      # count the SHAs after the first one
+   ```
+
+   - **None.** A root commit, which `git rebase --root` and a cherry-pick of a repository's first commit both replay. `<REF>^1` does not exist and exits 128. Diff from the empty tree instead: `git hash-object -t tree /dev/null` prints its SHA, and everything in the commit is what the operation brings.
+   - **One.** `<n>` is `1`.
+   - **More than one.** A merge commit; `<n>` is the `-m` the operation was given, which is not recoverable afterwards — ask the user.
+
+   Run only the row you matched; the others name refs that do not exist and fail loudly with `fatal: ambiguous argument`. On a revert the status letters are inverted — an `A` means the revert *removes* that path — so read the paths, not the letters.
 
 3. **Separate the user's work from the operation's.** The index right now holds both, and the operation is about to commit *all* of it — a merge commit takes the whole index no matter which paths you name.
 
@@ -100,21 +110,29 @@ Run every command below and **read what it printed**. Two shapes account for eve
 
 8. **Finish it.** Stage the conflicted files and whatever you edited in step 7, then run the finishing command for this operation from step 1.
 
-   **Rebase only: park the user's work first.** `git rebase --continue` requires a clean working tree, and the paths you rescued in step 4 are now unstaged modifications. It refuses with *"You must edit all merge conflicts and then mark them as resolved using git add"* — a message about conflicts, while `git diff --name-only --diff-filter=U` prints nothing. The only unstaged path in sight is the user's, so the obvious next move is to `git add` it, and the rebase then commits the very work step 4 rescued. Park it instead:
+   **Rebase only: park the user's tracked modifications first.** `git rebase --continue` needs a working tree with nothing modified except the conflict you just resolved. The paths you rescued in step 4 are now unstaged modifications, and it refuses with *"You must edit all merge conflicts and then mark them as resolved using git add"* — a message about conflicts, while `git diff --name-only --diff-filter=U` prints nothing. The only unstaged path in sight is the user's, so the obvious next move is to `git add` it, and the rebase then commits the very work step 4 rescued.
+
+   **Only tracked modifications need parking.** An untracked file does not block `--continue` and is never committed by it; leave it alone.
+
+   Park by moving the content out of the way, not with `git stash`:
 
    ```bash
-   git stash push -u -- <the paths you unstaged in step 4>   # read the exit code
-   git rebase --continue
-   git stash pop
+   G="$(git rev-parse --git-dir)"                       # from step 1
+   mkdir -p "$G/lean-parked"
+   cp <each tracked path from step 4> "$G/lean-parked/" # keep the user's version
+   git checkout -- <the same paths>                     # now the tree is clean
    ```
 
-   **`-u`, not a bare `push`.** Step 4 took these paths out of the index, so one that was staged as a *new* file is now untracked — and `git stash push` rejects a pathspec it does not know, failing the whole command rather than skipping that one path (`error: pathspec ... did not match any file(s) known to git`, exit 1). That is step 4's trap exactly, in a different command: the parking never happens, `--continue` refuses again, and you are back at the `git add` this step exists to prevent. A rename brings it too — its new path is untracked, and one untracked path kills the command for every path named alongside it.
+   `git stash` is the wrong tool here, and quietly so: a stash always records the **whole index**, which during a conflict holds the resolution you just staged. Popping it later replays that stale resolution over the rebased file and produces a fresh `UU` conflict that neither side asked for, and the paths come back **staged** rather than in the unstaged state step 4 left them in. Popping *during* the rebase is worse — the next commit may conflict too, and `git stash pop` against an unmerged index fails with `error: could not write index`, which reads like the work is gone when it is still in the stash.
 
-   **Read the exit code.** If `stash push` fails, stop; do not run `git rebase --continue`.
+   **Restore only once the whole operation is over.** A rebase of several commits stops at each conflicting one, so repeat step 1 through here for each; only when long-form `git status` reports no operation in progress:
 
-   After `git stash pop` the paths come back **unstaged**, and a new file comes back **untracked**. That is the state step 4 put them in, not a failed restore — re-staging is the user's call, not yours.
+   ```bash
+   cp "$G/lean-parked/"* <back to their paths>          # unstaged, as step 4 left them
+   rm -rf "$G/lean-parked"
+   ```
 
-   Merge, cherry-pick and revert do not need this — all three finish with the user's modifications sitting in the working tree, exit 0, and commit nothing of theirs.
+   Merge, cherry-pick and revert do not need any of this — all three finish with the user's modifications sitting in the working tree, exit 0, and commit nothing of theirs.
 
    If rebasing or cherry-picking, repeat from step 1 for each subsequent conflicted commit until git reports the operation complete — the boundary you recorded at the first conflict stays valid for the whole run.
 

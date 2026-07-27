@@ -10,7 +10,8 @@ went red. A mutation that survives is a gap; the run exits non-zero.
 
 Requires python (with PyYAML) and bash. The CI steps are read straight out of
 .github/workflows/ci.yml, so this cannot drift from what CI actually runs.
-Windows-only steps are skipped here; the `install.ps1` leg is exercised by CI.
+Cases against `install.ps1` run its CI step through PowerShell, and are skipped
+on platforms that do not have it.
 """
 import io, os, re, shutil, subprocess, sys, tempfile
 
@@ -23,6 +24,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CI = '.github/workflows/ci.yml'
 LEGS = {
     'install.sh': 'sh',
+    'install.ps1': 'win',          # only runnable on Windows; skipped elsewhere
     'manifests and frontmatter': 'meta',
     'git recipes in the skills actually run': 'rec',
     'platform parity': 'par',
@@ -50,15 +52,21 @@ def run_leg(leg):
         if LEGS.get(s.get('name')) != leg:
             continue
         body = s['run'].replace('python3 - ', sys.executable + ' - ')
+        rt = os.path.join(work, '_rt')
+        os.makedirs(rt, exist_ok=True)
+        env = dict(os.environ, RUNNER_TEMP=rt)
+        env.pop('CLAUDE_SKILLS_DIR', None)
+        if leg == 'win':
+            path = os.path.join(work, '_leg.ps1')
+            io.open(path, 'w', encoding='utf-8', newline='\r\n').write(body)
+            return subprocess.run(
+                ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path],
+                cwd=work, env=env, capture_output=True, timeout=900).returncode
         if leg == 'sh' and os.name == 'nt':
             body = '\n'.join(l for l in body.splitlines()
                              if not any(v in l for v in NO_SYMLINKS))
         path = os.path.join(work, '_leg.sh')
         io.open(path, 'w', encoding='utf-8', newline='\n').write(body)
-        rt = os.path.join(work, '_rt')
-        os.makedirs(rt, exist_ok=True)
-        env = dict(os.environ, RUNNER_TEMP=rt)
-        env.pop('CLAUDE_SKILLS_DIR', None)
         return subprocess.run(['bash', path], cwd=work, env=env,
                               capture_output=True, timeout=600).returncode
     raise SystemExit('no step maps to leg %r' % leg)
@@ -100,6 +108,10 @@ SPLIT_GOOD = "  IFS='\n'\n  for name in $(for d in"
 
 SPLIT_BAD = "  IFS=' '\n  for name in $(for d in"
 
+ABS_GOOD = "  $isAbsolute = ($d -match '^[A-Za-z]:[\\\\/]') -or ($d -match '^[\\\\/][\\\\/][^\\\\/]')"
+
+ABS_BAD = '  $isAbsolute = [IO.Path]::IsPathRooted($d)'
+
 CASES = [
     # (label, leg, mutation)
     ('parity: continue-on-error hides a step', 'par', lambda: edit(
@@ -140,7 +152,7 @@ CASES = [
     ('installer: leading blank accepted as absolute', 'sh', lambda: edit(
         'install.sh', GUARD_GOOD, GUARD_BAD)),
     ('installer: install.ps1 flattened to LF', 'sh', lambda: drop_crlf('install.ps1')),
-    ('installer: ps1 refusals go back to exit 1', 'meta', lambda: edit(
+    ('installer: ps1 refusals go back to exit 1', 'win', lambda: edit(
         'install.ps1', 'function Deny($msg, $code = 2) {', 'function Deny($msg, $code = 1) {')),
     # split on spaces again, which is what made a directory called
     # "two words" impossible to uninstall
@@ -148,6 +160,14 @@ CASES = [
         'install.sh', SPLIT_GOOD, SPLIT_BAD)),
     ('manifest: the marketplace pin goes stale', 'meta', lambda: edit(
         '.claude-plugin/marketplace.json', '"ref": "v', '"ref": "vX')),
+    ('installer: -e again instead of symlink-aware exists', 'sh', lambda: edit(
+        'install.sh', 'exists() { [ -e "$1" ] || [ -L "$1" ]; }',
+        'exists() { [ -e "$1" ]; }')),
+    ('installer: drive letters absolute everywhere again', 'sh', lambda: edit(
+        'install.sh', 'MINGW*|MSYS*|CYGWIN*) drive_letters_are_absolute=1 ;;',
+        'MINGW*|MSYS*|CYGWIN*|*) drive_letters_are_absolute=1 ;;')),
+    ('installer: ps1 back to IsPathRooted', 'win', lambda: edit(
+        'install.ps1', ABS_GOOD, ABS_BAD)),
     ('repo: a skill companion file deleted', 'sh',
      lambda: os.remove(os.path.join(work, 'skills/tdd/mocking.md'))),
 
@@ -197,6 +217,9 @@ def main():
         sys.exit('no case matches %r' % want)
     survivors = []
     for i, (label, leg, mutate) in enumerate(cases, 1):
+        if leg == 'win' and os.name != 'nt':
+            print('skipped   %s (needs Windows)' % label)
+            continue
         fresh(i)
         try:
             mutate()
