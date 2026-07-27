@@ -120,10 +120,13 @@ Run every command below and **read what it printed**. Two shapes account for eve
    G="$(git rev-parse --git-dir)"                          # from step 1
    P="$G/lean-parked-$(date +%s).patch"
    test ! -e "$P"                                          # never reuse a name
-   git diff --binary -- <each tracked path from step 4> > "$P"
+   git diff --binary -- <every path from step 4> > "$P"
    test -s "$P"                                            # nothing captured means nothing to park
-   git checkout -- <the same paths>                        # now the tree is clean
+   git -c core.quotePath=false status --porcelain -- <the same paths>   # read the first column
+   git checkout -- <only the paths git already tracks>     # now the tree is clean
    ```
+
+   **`git checkout --` takes tracked paths only.** This is step 4's trap for the third time in a third command: a pathspec git does not recognise makes it reject the *whole* command (`error: pathspec ... did not match any file(s) known to git`, exit 1), so nothing gets cleaned and `--continue` refuses. A rename in flight is exactly this shape — after step 4 its new path is untracked (`??`) while the old path's deletion is tracked (` D`). Clean the tracked ones; the untracked ones neither block `--continue` nor get committed by it, so leave them where they are. `git diff` is the tolerant one here — it ignores a path it does not know, so the patch command can name them all.
 
    **A patch, because a copy cannot carry what a change is.** `cp` moves file *contents*, and the user's work is not always contents: a deleted path has nothing to copy, a rename is two paths, `a/config.txt` and `b/config.txt` collapse onto each other in one flat directory, and a mode change is invisible. `git diff --binary` records all of it — paths, deletions, renames, modes, binary content — and it is the same patch format `git apply` reads back.
 
@@ -145,6 +148,12 @@ Run every command below and **read what it printed**. Two shapes account for eve
      ```
 
    - **Non-zero** — the operation changed one of these paths too, and `--3way` has written conflict markers rather than choosing for you. That is the honest answer, and the reason this is not a `cp`: a copy would have silently overwritten the operation's version. **Keep the patch**, name it to the user, and resolve those hunks with them. Delete it only after they confirm their work is back.
+
+   **If you abort instead of finishing** (step 6 allows that when the operation itself was the mistake), the parked work does not come back on its own — `git rebase --abort` restores the tree to before the rebase, which is before the parking too, so their edits appear to have vanished. Apply the patch and say where it was:
+
+   ```bash
+   git apply --3way "$P" && git restore --staged -- <the tracked paths> && rm -f "$P"
+   ```
 
    Merge, cherry-pick and revert do not need any of this — all three finish with the user's modifications sitting in the working tree, exit 0, and commit nothing of theirs.
 

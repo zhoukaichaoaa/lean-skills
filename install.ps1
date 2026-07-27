@@ -136,6 +136,19 @@ if ($aliased) { Deny-Target }
 # Every directory we install carries this marker, with this exact first line.
 # Uninstall removes only directories that have it, so a skill of your own that
 # happens to share a name with one of ours survives.
+# Test-Path asks about a link's *target*, so a symlink or junction pointing at
+# something missing - an unmounted disk, a moved directory - reads as "nothing
+# here", and every decision about the user's property misses it. A broken link
+# still has an entry in its parent, which is what this looks for.
+function Test-Exists($p) {
+  if (Test-Path -LiteralPath $p) { return $true }
+  $parent = Split-Path -Parent $p
+  $leaf = Split-Path -Leaf $p
+  if (-not $parent -or -not (Test-Path -LiteralPath $parent)) { return $false }
+  return [bool](Get-ChildItem -LiteralPath $parent -Force -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -eq $leaf })
+}
+
 $marker = '.lean-skills'
 # Claude Code loads every directory under the skills root, so a scratch directory
 # left behind by an interrupted run would be loaded as a skill of its own.
@@ -147,7 +160,7 @@ function Remove-Scratch {
   if (-not $script:destAbs) { return }
   $staging  = Join-Path $script:destAbs ".lean-skills-staging-$PID"
   $outgoing = Join-Path $script:destAbs ".lean-skills-outgoing-$PID"
-  if ($script:swapTarget -and (Test-Path -LiteralPath $outgoing) -and -not (Test-Path -LiteralPath $script:swapTarget)) {
+  if ($script:swapTarget -and (Test-Exists $outgoing) -and -not (Test-Exists $script:swapTarget)) {
     try {
       Move-Item -LiteralPath $outgoing -Destination $script:swapTarget
       Write-Host "  restored  $(Split-Path -Leaf $script:swapTarget) (install did not finish)"
@@ -187,7 +200,7 @@ if ($Uninstall) {
   $spared = 0
   foreach ($name in (@($srcDirs | ForEach-Object { $_.Name }) + $retired)) {
     $target = Join-Path $destAbs $name
-    if (-not (Test-Path -LiteralPath $target)) { continue }
+    if (-not (Test-Exists $target)) { continue }
     if ((Test-Ours $target) -or $Adopt) {
       Remove-Item -Recurse -Force -LiteralPath $target
       Write-Host "  removed   $name"
@@ -215,15 +228,15 @@ foreach ($dir in $srcDirs) {
 
   # Anything at our name without our marker is either yours or a pre-0.7.0
   # install of ours. We cannot tell, so we do not guess: keep it unless -Adopt.
-  $adopting = (Test-Path -LiteralPath $target) -and -not (Test-Ours $target) -and $Adopt
-  if ((Test-Path -LiteralPath $target) -and -not (Test-Ours $target) -and -not $Adopt) {
+  $adopting = (Test-Exists $target) -and -not (Test-Ours $target) -and $Adopt
+  if ((Test-Exists $target) -and -not (Test-Ours $target) -and -not $Adopt) {
     Write-Host "  kept      $($dir.Name) (no ownership marker)"
     $kept++
     $unmarked++
     continue
   }
 
-  if (Test-Path -LiteralPath $target) {
+  if (Test-Exists $target) {
     if (-not $Yes) {
       # Read-Host throws under -NonInteractive; treat that as "keep it".
       try { $reply = Read-Host "overwrite existing $($dir.Name)? [y/N]" } catch { $reply = '' }
@@ -247,7 +260,7 @@ foreach ($dir in $srcDirs) {
   $outgoing = Join-Path $destAbs ".lean-skills-outgoing-$PID"
   if (Test-Path -LiteralPath $outgoing) { Remove-Item -Recurse -Force -LiteralPath $outgoing }
   $script:swapTarget = $target          # the window opens here
-  if (Test-Path -LiteralPath $target) { Move-Item -LiteralPath $target -Destination $outgoing }
+  if (Test-Exists $target) { Move-Item -LiteralPath $target -Destination $outgoing }
   Move-Item -LiteralPath $staging -Destination $target
   $script:swapTarget = ''               # ...and closes only once the new copy is in place
   if (Test-Path -LiteralPath $outgoing) { Remove-Item -Recurse -Force -LiteralPath $outgoing }
@@ -258,7 +271,7 @@ foreach ($dir in $srcDirs) {
 # Retire what we no longer ship.
 foreach ($name in $retired) {
   $target = Join-Path $destAbs $name
-  if (-not (Test-Path -LiteralPath $target)) { continue }
+  if (-not (Test-Exists $target)) { continue }
   if ((Test-Ours $target) -or $Adopt) {
     Remove-Item -Recurse -Force -LiteralPath $target
     Write-Host "  retired   $name (no longer part of this collection)"

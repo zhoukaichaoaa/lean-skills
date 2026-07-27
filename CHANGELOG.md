@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.13.3 — 2026-07-28
+
+自审，专打 0.13.2 刚写的停靠流程。**两条，一条是同一个陷阱第三次换命令咬我，一条是我自己违反双平台规则。**
+
+**`git checkout --` 遇到它不认识的路径会整条失败**
+
+用户在途做的是一次重命名时，第 4 步之后新路径是 untracked、旧路径的删除是 tracked：
+
+```
+step 4 后: [UU f.txt  D sub/old.txt ?? sub/new.txt ]
+git checkout -- sub/old.txt sub/new.txt
+error: pathspec 'sub/new.txt' did not match any file(s) known to git   exit=1
+清理后: [M  f.txt  D sub/old.txt ...]      <- 删除没被清掉，--continue 会拒绝
+```
+
+这是 **`git restore --staged` → `git stash push` → `git checkout --`** 同一个陷阱的第三次。真正的教训已写进技能：**任何吃 pathspec 的 git 命令，遇到一个它不认识的路径就拒绝整条命令**。改为 `git checkout --` 只给 tracked 的那些（untracked 本来就不挡 `--continue`、也不会被提交）；`git diff` 是宽容的，补丁那条可以全部点名。修正后同一夹具：`checkout exit=0`，最终状态 ` D sub/old.txt` + `?? sub/new.txt`（正是第 4 步的形状），0 次被卷进提交。
+
+**中途 `--abort` 会让停靠的工作看起来消失**
+
+`git rebase --abort` 把工作区恢复到 rebase 之前 —— 也就是停靠之前，用户的修改在工作区里不见了，只在补丁里。实测补丁能完整重新应用，但技能此前对这个分支一字未提。已补上。
+
+**Windows 侧的 symlink 盲区根本没修**
+
+0.13.1 把 `[ -e ]` 改成 `exists()`（`-e` 或 `-L`）—— **只改了 `install.sh`**。`install.ps1` 仍在用 `Test-Path`，而它同样回答的是链接**目标**是否存在，断裂链接返回 False。同一个 bug 在 Windows 侧原封不动地留了一版 —— 直接违反了“改动要双平台都做”这条规则。新增 `Test-Exists`（先 `Test-Path`，不行则查父目录的条目），6 处 `$target` 判定与回滚全部改用它。CI 新增一条：`install.ps1` 里不得再用 `Test-Path` 决定用户的东西。
+
+**本机无法验证**：Windows 上创建断裂符号链接需要管理员或开发者模式，本机造不出。`Test-Exists` 的正确性靠代码路径与 CI；上面那条文本断言至少保证它不会静默退回。
+
+**验证**：CI 的 9 条 run-step 里 8 条在干净克隆上实跑（含 Windows）；`tests/mutations.py` 36/36。
+
 ## 0.13.2 — 2026-07-28
 
 第六份第三方审计，2 条发现，**都成立，都是丢数据**。两条打的都是 0.13.1 自己刚写的代码。

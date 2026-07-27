@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "A minimal, context-budgeted skill set distilled from mattpocock/skills and obra/superpowers",
-    "version": "0.13.2"
+    "version": "0.13.3"
   },
   "plugins": [
     {
@@ -13,10 +13,10 @@
       "source": {
         "source": "url",
         "url": "https://github.com/zhoukaichaoaa/lean-skills.git",
-        "ref": "v0.13.2"
+        "ref": "v0.13.3"
       },
       "description": "9 skills, 5 resident. No mandatory preamble, no session-start injection.",
-      "version": "0.13.2",
+      "version": "0.13.3",
       "strict": true
     }
   ]

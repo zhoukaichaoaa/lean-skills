@@ -93,7 +93,7 @@ ABSCASE_GOOD = '  case "$CLAUDE_SKILLS_DIR" in\n    /*) : ;;'
 
 ABSCASE_BAD = '  case "$CLAUDE_SKILLS_DIR" in\n    " "*) : ;;\n    /*) : ;;'
 
-PARK_GOOD = '   git diff --binary -- <each tracked path from step 4> > "$P"'
+PARK_GOOD = '   git diff --binary -- <every path from step 4> > "$P"'
 
 PARK_STASH = '   git stash push -u -- <each tracked path from step 4>'
 
@@ -170,10 +170,15 @@ CASES = [
     ('installer: rollback only restores directories', 'sh', lambda: edit(
         'install.sh', 'exists "$_outgoing" && ! exists "$swap_target"',
         '[ -d "$_outgoing" ] && ! exists "$swap_target"')),
-    ('skill: parks with cp again', 'rec', lambda: edit(
+    ('skill: checkout takes untracked paths again', 'rec', lambda: edit(
         'skills/resolving-merge-conflicts/SKILL.md',
-        '   git diff --binary -- <each tracked path from step 4> > "$P"',
-        '   cp <each tracked path from step 4> "$G/lean-parked/"')),
+        '   git checkout -- <only the paths git already tracks>',
+        '   git checkout -- <the same paths>')),
+    ('installer: ps1 loses its symlink-aware test', 'win', lambda: edit(
+        'install.ps1', 'function Test-Exists($p) {', 'function Test-Exists-DISABLED($p) {')),
+    ('skill: parks with cp again', 'rec', lambda: edit(
+        'skills/resolving-merge-conflicts/SKILL.md', PARK_GOOD,
+        '   cp <every path from step 4> "$G/lean-parked/"')),
     ('installer: -e again instead of symlink-aware exists', 'sh', lambda: edit(
         'install.sh', 'exists() { [ -e "$1" ] || [ -L "$1" ]; }',
         'exists() { [ -e "$1" ]; }')),
