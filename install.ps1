@@ -92,18 +92,29 @@ try { [IO.File]::WriteAllText($probePath, '') }
 catch { Undo-Created; throw "cannot write to target $destAbs" }
 Remove-Item -Force -LiteralPath $probePath -ErrorAction SilentlyContinue
 
+# Every directory we install carries this marker. Uninstall removes only the
+# directories that have it, so a skill of your own that happens to share a name
+# with one of ours survives.
+$marker = '.lean-skills'
+
 if ($Uninstall) {
   $removed = 0
+  $spared = 0
   foreach ($dir in $srcDirs) {
     $target = Join-Path $destAbs $dir.Name
     if (Test-Path -LiteralPath $target) {
-      Remove-Item -Recurse -Force -LiteralPath $target
-      Write-Host "  removed   $($dir.Name)"
-      $removed++
+      if (Test-Path -LiteralPath (Join-Path $target $marker)) {
+        Remove-Item -Recurse -Force -LiteralPath $target
+        Write-Host "  removed   $($dir.Name)"
+        $removed++
+      } else {
+        Write-Host "  kept      $($dir.Name) (not installed by lean-skills)"
+        $spared++
+      }
     }
   }
   Write-Host ""
-  Write-Host "$removed removed from $destAbs - only this collection's skills; anything else was left alone."
+  Write-Host "$removed removed from $destAbs; $spared left in place because they are not ours."
   exit 0
 }
 
@@ -112,6 +123,13 @@ $kept = 0
 
 foreach ($dir in $srcDirs) {
   $target = Join-Path $destAbs $dir.Name
+  # A directory without our marker belongs to the user, whatever it is called.
+  # Never replace it, even with -Yes.
+  if ((Test-Path -LiteralPath $target) -and -not (Test-Path -LiteralPath (Join-Path $target $marker))) {
+    Write-Host "  kept      $($dir.Name) (yours, not ours - install elsewhere with CLAUDE_SKILLS_DIR)"
+    $kept++
+    continue
+  }
   if (Test-Path -LiteralPath $target) {
     if (-not $Yes) {
       # Read-Host throws under -NonInteractive; treat that as "keep it".
@@ -130,6 +148,7 @@ foreach ($dir in $srcDirs) {
   Copy-Item -Recurse -LiteralPath $dir.FullName -Destination $staging
   if (Test-Path -LiteralPath $target) { Remove-Item -Recurse -Force -LiteralPath $target }
   Move-Item -LiteralPath $staging -Destination $target
+  [IO.File]::WriteAllText((Join-Path $target $marker), "installed by lean-skills; uninstall removes only directories carrying this file`r`n")
   Write-Host "  installed $($dir.Name)"
   $installed++
 }
@@ -139,5 +158,5 @@ Write-Host "$installed installed, $kept kept -> $destAbs"
 Write-Host "Restart your Claude Code session to pick them up. Remove later with -Uninstall."
 Write-Host ""
 Write-Host "Resident (model-invoked): verification-before-completion, receiving-code-review,"
-Write-Host "                          diagnosing-bugs, code-review, resolving-merge-conflicts"
+Write-Host "                          diagnosing-bugs, spec-review, resolving-merge-conflicts"
 Write-Host "Manual (user-invoked):    grill-me, implement, tdd, worktree"

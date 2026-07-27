@@ -33,12 +33,14 @@ jobs:
           sh -n install.sh
           command -v dash >/dev/null && dash -n install.sh || true
           SRC_FILES=$(find skills -type f | wc -l)
-
+          SRC_DIRS=$(find skills -mindepth 1 -maxdepth 1 -type d | wc -l)
           # every installed file, not just SKILL.md — a copy that dropped
-          # tdd/tests.md would otherwise pass
+          # tdd/tests.md would otherwise pass. Each installed directory also
+          # gains one .lean-skills ownership marker.
           install_ok() {
-            test "$(find "$1" -type f | wc -l)" -eq "$SRC_FILES"
+            test "$(find "$1" -type f | wc -l)" -eq "$((SRC_FILES + SRC_DIRS))"
             test "$(find "$1" -name SKILL.md | wc -l)" -eq 9
+            test "$(find "$1" -name .lean-skills | wc -l)" -eq "$SRC_DIRS"
           }
           # a guard must refuse with exit 2, say so, and leave the repo untouched
           guard_refuses() {
@@ -89,11 +91,16 @@ jobs:
           $ErrorActionPreference = 'Stop'
           Set-ExecutionPolicy -Scope Process Bypass -Force
           $srcFiles = (Get-ChildItem -Recurse -File skills).Count
+          $srcDirs = (Get-ChildItem -Directory skills).Count
           function Assert-Install($p) {
-            $f = (Get-ChildItem -Recurse -File -LiteralPath $p).Count
+            # each installed directory also gains one .lean-skills marker
+            $want = $srcFiles + $srcDirs
+            $f = (Get-ChildItem -Recurse -File -Force -LiteralPath $p).Count
             $s = (Get-ChildItem -Recurse -Filter SKILL.md -LiteralPath $p).Count
-            if ($f -ne $srcFiles) { throw "expected $srcFiles files, got $f" }
+            $m = (Get-ChildItem -Recurse -Filter .lean-skills -Force -LiteralPath $p).Count
+            if ($f -ne $want) { throw "expected $want files, got $f" }
             if ($s -ne 9) { throw "expected 9 SKILL.md, got $s" }
+            if ($m -ne $srcDirs) { throw "expected $srcDirs markers, got $m" }
           }
           function Assert-Refused($p, $op) {
             $threw = $false
@@ -139,10 +146,21 @@ jobs:
           .\install.ps1 -Yes | Out-Null; Assert-Install $T
           [IO.Directory]::CreateDirectory((Join-Path $T 'not-ours')) | Out-Null
           [IO.File]::WriteAllText((Join-Path $T 'not-ours\SKILL.md'), '')
+          # a skill of the user's that happens to share one of our names
+          Remove-Item -Recurse -Force -LiteralPath (Join-Path $T 'tdd')
+          [IO.Directory]::CreateDirectory((Join-Path $T 'tdd')) | Out-Null
+          [IO.File]::WriteAllText((Join-Path $T 'tdd\SKILL.md'), 'USER-OWNED')
+          .\install.ps1 -Yes | Out-Null
+          if ((Get-Content -Raw -LiteralPath (Join-Path $T 'tdd\SKILL.md')) -notmatch 'USER-OWNED') {
+            throw "install clobbered a user-owned same-named skill"
+          }
           .\install.ps1 -Uninstall | Out-Null
           if (-not (Test-Path -LiteralPath (Join-Path $T 'not-ours\SKILL.md'))) { throw "uninstall removed a foreign skill" }
+          if ((Get-Content -Raw -LiteralPath (Join-Path $T 'tdd\SKILL.md')) -notmatch 'USER-OWNED') {
+            throw "uninstall removed a user-owned same-named skill"
+          }
           $left = (Get-ChildItem -Recurse -Filter SKILL.md -LiteralPath $T).Count
-          if ($left -ne 1) { throw "uninstall left $left SKILL.md, want 1 (the foreign one)" }
+          if ($left -ne 2) { throw "uninstall left $left SKILL.md, want 2 (both theirs)" }
           $dirty = git status --porcelain
           if ($dirty) { throw "repo dirty at end: $dirty" }
 
