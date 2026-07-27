@@ -188,6 +188,19 @@ cd lean-skills
 
 版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 
+### 发布清单
+
+按顺序走，每一条都是被某次事故加进来的：
+
+1. **标签一经推送即不可变。** 发版前确认 `git ls-remote --tags origin` 里没有该标签；任何修复走新版本号，绝不 `tag -f`。v0.9.0 的标签被移动过一次，同一版本号在不同时间指向不同内容 —— 那是错误做法，不会再有第二次。
+2. **任何改动都要 Windows 与 macOS 双平台落地，并各自有断言。** `install.sh` 与 `install.ps1` 同时改；CI 步骤默认 `if: runner.os != 'Windows'`，单平台步骤必须在 `platform parity` 的豁免表里写明理由。一端有断言、另一端没有，等于没有。
+3. 改 `.claude-plugin/` 两个 manifest 的版本号（三处）。
+4. **更新 NOTICE 的逐文件行**，并重算词数。口径是 **`awk '{n+=NF}END{print n}' <file>`** —— 不用 `wc -w`，它的结果随 locale 和 GNU/BSD 实现而变（同一份文件 851 vs 877），写进文档就无法复核。CI 会重算每一个箭头。
+5. 更新 CHANGELOG。
+6. **本地把 CI 的每条腿在干净克隆上原样跑一遍。** 这一步已经抓到过四个只在 CI 里才会暴露的 bug。
+7. **对新增的断言做变异测试** —— 故意把被测的东西改坏，确认它真的会红。哑弹断言在这个仓库出现过不止一次（`-notmatch 'THEIRS'` 因大小写不敏感而永不触发）。
+8. commit & push → 三平台 CI 绿 → `git tag vX.Y.Z && git push --tags` → `gh release create` → 核对 GitHub 上的描述 → `claude plugin validate --strict .`
+
 ## 归属
 
 本合集是衍生作品，上游两个仓库都是 MIT。逐文件的来源和改动记录见 [NOTICE.md](NOTICE.md)。

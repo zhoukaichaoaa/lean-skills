@@ -17,7 +17,7 @@ GIT_COMMON=$(cd "$(git rev-parse --git-common-dir)" 2>/dev/null && pwd -P)
 git rev-parse --show-superproject-working-tree 2>/dev/null   # non-empty ⇒ submodule
 ```
 
-If the first command does not print `true` — no repository here, or a bare one — stop and say so. Both leave `GIT_DIR` and `GIT_COMMON` empty, which compares equal and would otherwise be read as an ordinary checkout.
+If the first command does not print `true` — no repository here, or a bare one — stop and say so. In both cases `GIT_DIR` and `GIT_COMMON` come out **equal**, which the test below would otherwise read as an ordinary checkout. (A bare repository prints `false` and exits 0, so judge the text, not the exit code.)
 
 `GIT_DIR != GIT_COMMON` **and not a submodule** ⇒ you are already in a linked worktree. Report the path and branch, then go to Step 2. The submodule check also tells Step 1 which exclude file to write: submodules keep `.git` as a file, so the literal `.git/info/exclude` path does not exist there.
 
@@ -67,4 +67,4 @@ Report the workspace path, the branch, and the baseline test result as actual co
 
 ---
 
-_Condensed from [obra/superpowers](https://github.com/obra/superpowers) `using-git-worktrees` (MIT); branch naming, repo-local exclude via `--git-common-dir`, and lockfile-driven package-manager detection added._
+_Condensed from [obra/superpowers](https://github.com/obra/superpowers) `using-git-worktrees` (MIT) and renamed from `using-git-worktrees`; branch naming, repo-local exclude via `--git-common-dir`, lockfile-driven package-manager detection, the `WTDIR` single-variable rule, the `--is-inside-work-tree` gate, Step 3 (teardown) and the completion criterion are all additions._

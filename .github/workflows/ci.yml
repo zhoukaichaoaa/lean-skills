@@ -35,6 +35,10 @@ jobs:
           SRC_FILES=$(find skills -type f | wc -l)
           SRC_DIRS=$(find skills -mindepth 1 -maxdepth 1 -type d | wc -l)
           SRC_LIST=$(find skills -mindepth 1 -maxdepth 1 | sort)
+          # a sentinel the shipped text could contain is a dead assertion
+          for s in ZZ-USER-SENTINEL-ZZ ZZ-FOREIGN-SENTINEL-ZZ ZZ-MINE-SENTINEL-ZZ ZZ-OLD-SENTINEL-ZZ; do
+            grep -rqF "$s" skills/ && { echo "sentinel $s collides with shipped text"; exit 1; }
+          done
           # every installed file, not just SKILL.md — a copy that dropped
           # tdd/tests.md would otherwise pass. Each installed directory also
           # gains one .lean-skills ownership marker.
@@ -42,6 +46,7 @@ jobs:
             test "$(find "$1" -type f | wc -l)" -eq "$((SRC_FILES + SRC_DIRS))"
             test "$(find "$1" -name SKILL.md | wc -l)" -eq 9
             test "$(find "$1" -name .lean-skills | wc -l)" -eq "$SRC_DIRS"
+            diff -r --exclude=.lean-skills skills "$1" >/dev/null || { echo "installed tree differs from source"; exit 1; }
           }
           # a guard must refuse with exit 2, say so, and leave the repo untouched
           guard_refuses() {
@@ -79,25 +84,25 @@ jobs:
           mkdir -p "$T/not-ours" && : > "$T/not-ours/SKILL.md"
           # a skill of the user's that happens to share one of our names
           mkdir -p "$T/tdd-user-check" && : > "$T/tdd-user-check/SKILL.md"
-          rm -rf "$T/tdd" && mkdir -p "$T/tdd" && echo USER-OWNED > "$T/tdd/SKILL.md"
+          rm -rf "$T/tdd" && mkdir -p "$T/tdd" && echo ZZ-USER-SENTINEL-ZZ > "$T/tdd/SKILL.md"
           # install now exits 3 when it keeps something it cannot claim
           set +e; CLAUDE_SKILLS_DIR="$T" ./install.sh -y >/dev/null 2>&1; rc=$?; set -e
           test "$rc" -eq 3 || { echo "install keeping a user skill should exit 3, got $rc"; exit 1; }
-          grep -q USER-OWNED "$T/tdd/SKILL.md"                  # install must not clobber it
+          grep -qF ZZ-USER-SENTINEL-ZZ "$T/tdd/SKILL.md"                  # install must not clobber it
           # uninstall now exits 3 when it spares something it cannot claim
           set +e; CLAUDE_SKILLS_DIR="$T" ./install.sh --uninstall >/dev/null 2>&1; rc=$?; set -e
           test "$rc" -eq 3 || { echo "uninstall sparing a user skill should exit 3, got $rc"; exit 1; }
           test -f "$T/not-ours/SKILL.md"                       # a foreign skill survives
-          grep -q USER-OWNED "$T/tdd/SKILL.md"                  # ...including a same-named one
+          grep -qF ZZ-USER-SENTINEL-ZZ "$T/tdd/SKILL.md"                  # ...including a same-named one
           test "$(find "$T" -name SKILL.md | wc -l)" -eq 3      # ours are gone, three of theirs remain
           test -z "$(git status --porcelain)"
 
           # a foreign .lean-skills must not count as ours (content, not mere presence)
           mkdir -p "$T/implement"; echo "someone elses marker" > "$T/implement/.lean-skills"
-          echo THEIRS > "$T/implement/SKILL.md"
+          echo ZZ-FOREIGN-SENTINEL-ZZ > "$T/implement/SKILL.md"
           set +e; CLAUDE_SKILLS_DIR="$T" ./install.sh -y >/dev/null 2>&1; rc=$?; set -e
           test "$rc" -eq 3 || { echo "a foreign marker was accepted as ours"; exit 1; }
-          grep -q THEIRS "$T/implement/SKILL.md"
+          grep -qF ZZ-FOREIGN-SENTINEL-ZZ "$T/implement/SKILL.md"
 
           # a non-directory at one of our names is still the users
           rm -rf "$T/worktree"; : > "$T/worktree"
@@ -107,9 +112,9 @@ jobs:
           rm -f "$T/worktree"
 
           # no -y and no tty: nothing may be overwritten, not even with --adopt
-          C="$RUNNER_TEMP/consent"; mkdir -p "$C/grill-me"; echo MINE > "$C/grill-me/SKILL.md"
+          C="$RUNNER_TEMP/consent"; mkdir -p "$C/grill-me"; echo ZZ-MINE-SENTINEL-ZZ > "$C/grill-me/SKILL.md"
           set +e; CLAUDE_SKILLS_DIR="$C" ./install.sh --adopt </dev/null >/dev/null 2>&1; set -e
-          grep -q MINE "$C/grill-me/SKILL.md" || { echo "--adopt overwrote without consent"; exit 1; }
+          grep -qF ZZ-MINE-SENTINEL-ZZ "$C/grill-me/SKILL.md" || { echo "--adopt overwrote without consent"; exit 1; }
 
           # a relative target is refused, and writes nothing
           set +e; CLAUDE_SKILLS_DIR=rel/here ./install.sh -y >/dev/null 2>&1; rc=$?; set -e
@@ -129,13 +134,13 @@ jobs:
 
           # upgrading from a version that wrote no markers must not silently no-op
           U="$RUNNER_TEMP/legacy"
-          for s in $(ls skills); do mkdir -p "$U/$s"; echo OLD > "$U/$s/SKILL.md"; done
-          mkdir -p "$U/code-review" && echo OLD > "$U/code-review/SKILL.md"   # a retired name
+          for s in $(ls skills); do mkdir -p "$U/$s"; echo ZZ-OLD-SENTINEL-ZZ > "$U/$s/SKILL.md"; done
+          mkdir -p "$U/code-review" && echo ZZ-OLD-SENTINEL-ZZ > "$U/code-review/SKILL.md"   # a retired name
           set +e; CLAUDE_SKILLS_DIR="$U" ./install.sh -y >/dev/null 2>&1; rc=$?; set -e
           test "$rc" -eq 3 || { echo "legacy upgrade should exit 3, got $rc"; exit 1; }
-          grep -q OLD "$U/tdd/SKILL.md" || { echo "legacy upgrade overwrote without --adopt"; exit 1; }
+          grep -qF ZZ-OLD-SENTINEL-ZZ "$U/tdd/SKILL.md" || { echo "legacy upgrade overwrote without --adopt"; exit 1; }
           CLAUDE_SKILLS_DIR="$U" ./install.sh -y --adopt >/dev/null
-          if grep -q OLD "$U/tdd/SKILL.md"; then echo "--adopt did not take over"; exit 1; fi
+          if grep -qF ZZ-OLD-SENTINEL-ZZ "$U/tdd/SKILL.md"; then echo "--adopt did not take over"; exit 1; fi
           test ! -e "$U/code-review" || { echo "--adopt left the retired skill behind"; exit 1; }
           test "$(find "$U" -name .lean-skills | wc -l)" -eq "$SRC_DIRS"
 
@@ -168,8 +173,37 @@ jobs:
           }
 
           $env:CLAUDE_SKILLS_DIR = Join-Path $env:RUNNER_TEMP 'skills'
-          .\install.ps1 -Yes | Out-Null; Assert-Install $env:CLAUDE_SKILLS_DIR
-          .\install.ps1 -Yes | Out-Null; Assert-Install $env:CLAUDE_SKILLS_DIR
+          & powershell -NoProfile -File .\install.ps1 -Yes | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "clean install should exit 0, got $LASTEXITCODE" }
+          Assert-Install $env:CLAUDE_SKILLS_DIR
+          & powershell -NoProfile -File .\install.ps1 -Yes | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "idempotent install should exit 0, got $LASTEXITCODE" }
+          Assert-Install $env:CLAUDE_SKILLS_DIR
+
+          # no -Yes and no console: nothing may be overwritten, not even with -Adopt
+          $C = Join-Path $env:RUNNER_TEMP 'consent'
+          [IO.Directory]::CreateDirectory((Join-Path $C 'grill-me')) | Out-Null
+          [IO.File]::WriteAllText((Join-Path $C 'grill-me\SKILL.md'), 'ZZ-MINE-SENTINEL-ZZ')
+          $env:CLAUDE_SKILLS_DIR = $C
+          & powershell -NoProfile -NonInteractive -File .\install.ps1 -Adopt | Out-Null
+          if (-not (Get-Content -Raw (Join-Path $C 'grill-me\SKILL.md')).Contains('ZZ-MINE-SENTINEL-ZZ')) {
+            throw "-Adopt overwrote without consent"
+          }
+          & powershell -NoProfile -NonInteractive -File .\install.ps1 | Out-Null
+          if (-not (Get-Content -Raw (Join-Path $C 'grill-me\SKILL.md')).Contains('ZZ-MINE-SENTINEL-ZZ')) {
+            throw "install overwrote without consent"
+          }
+
+          # the clean uninstall path, without -Adopt, must also clear the markers
+          $K = Join-Path $env:RUNNER_TEMP 'cleanps'
+          $env:CLAUDE_SKILLS_DIR = $K
+          & powershell -NoProfile -File .\install.ps1 -Yes | Out-Null
+          & powershell -NoProfile -File .\install.ps1 -Uninstall | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "clean uninstall should exit 0, got $LASTEXITCODE" }
+          if ((Get-ChildItem -Recurse -Filter SKILL.md -LiteralPath $K -ErrorAction SilentlyContinue).Count -ne 0) { throw "SKILL.md left behind" }
+          if ((Get-ChildItem -Recurse -Filter .lean-skills -Force -LiteralPath $K -ErrorAction SilentlyContinue).Count -ne 0) { throw "markers left behind" }
+          if (-not (Select-String -SimpleMatch 'Move-Item -LiteralPath $staging' .\install.ps1)) { throw "the atomic swap is gone" }
+          $env:CLAUDE_SKILLS_DIR = Join-Path $env:RUNNER_TEMP 'skills'
 
           $repo = (Get-Location).Path
           Assert-Refused (Join-Path $repo 'skills') 'Yes'
@@ -207,17 +241,17 @@ jobs:
           # a skill of the user's that happens to share one of our names
           Remove-Item -Recurse -Force -LiteralPath (Join-Path $T 'tdd')
           [IO.Directory]::CreateDirectory((Join-Path $T 'tdd')) | Out-Null
-          [IO.File]::WriteAllText((Join-Path $T 'tdd\SKILL.md'), 'USER-OWNED')
+          [IO.File]::WriteAllText((Join-Path $T 'tdd\SKILL.md'), 'ZZ-USER-SENTINEL-ZZ')
           & powershell -NoProfile -File .\install.ps1 -Yes | Out-Null
           if ($LASTEXITCODE -ne 3) { throw "install keeping a user skill should exit 3, got $LASTEXITCODE" }
-          if ((Get-Content -Raw -LiteralPath (Join-Path $T 'tdd\SKILL.md')) -notmatch 'USER-OWNED') {
+          if (-not (Get-Content -Raw -LiteralPath (Join-Path $T 'tdd\SKILL.md')).Contains('ZZ-USER-SENTINEL-ZZ')) {
             throw "install clobbered a user-owned same-named skill"
           }
           # uninstall now exits 3 when it spares something it cannot claim
           & powershell -NoProfile -File .\install.ps1 -Uninstall | Out-Null
           if ($LASTEXITCODE -ne 3) { throw "uninstall sparing a user skill should exit 3, got $LASTEXITCODE" }
           if (-not (Test-Path -LiteralPath (Join-Path $T 'not-ours\SKILL.md'))) { throw "uninstall removed a foreign skill" }
-          if ((Get-Content -Raw -LiteralPath (Join-Path $T 'tdd\SKILL.md')) -notmatch 'USER-OWNED') {
+          if (-not (Get-Content -Raw -LiteralPath (Join-Path $T 'tdd\SKILL.md')).Contains('ZZ-USER-SENTINEL-ZZ')) {
             throw "uninstall removed a user-owned same-named skill"
           }
           $left = (Get-ChildItem -Recurse -Filter SKILL.md -LiteralPath $T).Count
@@ -227,17 +261,17 @@ jobs:
           $skillNames = @(Get-ChildItem -Directory skills | ForEach-Object { $_.Name })
           foreach ($n in $skillNames) {
             [IO.Directory]::CreateDirectory((Join-Path $U $n)) | Out-Null
-            [IO.File]::WriteAllText((Join-Path $U ($n + '\SKILL.md')), 'OLD')
+            [IO.File]::WriteAllText((Join-Path $U ($n + '\SKILL.md')), 'ZZ-OLD-SENTINEL-ZZ')
           }
           [IO.Directory]::CreateDirectory((Join-Path $U 'code-review')) | Out-Null
-          [IO.File]::WriteAllText((Join-Path $U 'code-review\SKILL.md'), 'OLD')
+          [IO.File]::WriteAllText((Join-Path $U 'code-review\SKILL.md'), 'ZZ-OLD-SENTINEL-ZZ')
           $env:CLAUDE_SKILLS_DIR = $U
           & powershell -NoProfile -File .\install.ps1 -Yes | Out-Null
           if ($LASTEXITCODE -ne 3) { throw "legacy upgrade should exit 3, got $LASTEXITCODE" }
-          if ((Get-Content -Raw (Join-Path $U 'tdd\SKILL.md')) -notmatch 'OLD') { throw "overwrote without -Adopt" }
+          if (-not (Get-Content -Raw (Join-Path $U 'tdd\SKILL.md')).Contains('ZZ-OLD-SENTINEL-ZZ')) { throw "overwrote without -Adopt" }
           & powershell -NoProfile -File .\install.ps1 -Yes -Adopt | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "-Adopt should succeed, got $LASTEXITCODE" }
-          if ((Get-Content -Raw (Join-Path $U 'tdd\SKILL.md')) -match 'OLD') { throw "-Adopt did not take over" }
+          if ((Get-Content -Raw (Join-Path $U 'tdd\SKILL.md')).Contains('ZZ-OLD-SENTINEL-ZZ')) { throw "-Adopt did not take over" }
           if (Test-Path -LiteralPath (Join-Path $U 'code-review')) { throw "-Adopt left the retired skill behind" }
           $m = (Get-ChildItem -Recurse -Filter .lean-skills -Force -LiteralPath $U).Count
           if ($m -ne $skillNames.Count) { throw "expected $($skillNames.Count) markers after adopt, got $m" }
@@ -251,12 +285,18 @@ jobs:
           $F = Join-Path $env:RUNNER_TEMP 'foreign'
           [IO.Directory]::CreateDirectory((Join-Path $F 'implement')) | Out-Null
           [IO.File]::WriteAllText((Join-Path $F 'implement\.lean-skills'), 'someone elses marker')
-          [IO.File]::WriteAllText((Join-Path $F 'implement\SKILL.md'), 'THEIRS')
+          [IO.File]::WriteAllText((Join-Path $F 'implement\SKILL.md'), 'ZZ-FOREIGN-SENTINEL-ZZ')
           [IO.File]::WriteAllText((Join-Path $F 'worktree'), 'a plain file at our name')
           $env:CLAUDE_SKILLS_DIR = $F
           & powershell -NoProfile -File .\install.ps1 -Yes | Out-Null
           if ($LASTEXITCODE -ne 3) { throw "foreign marker / non-directory should block, got $LASTEXITCODE" }
-          if ((Get-Content -Raw (Join-Path $F 'implement\SKILL.md')) -notmatch 'THEIRS') { throw "a foreign marker was accepted as ours" }
+          if (-not (Get-Content -Raw (Join-Path $F 'implement\SKILL.md')).Contains('ZZ-FOREIGN-SENTINEL-ZZ')) { throw "a foreign marker was accepted as ours" }
+          # a sentinel that the shipped text could ever contain is a dead assertion
+          foreach ($s in @('ZZ-FOREIGN-SENTINEL-ZZ','ZZ-USER-SENTINEL-ZZ','ZZ-OLD-SENTINEL-ZZ')) {
+            if (Get-ChildItem skills -Recurse -Filter SKILL.md | Select-String -SimpleMatch $s) {
+              throw "sentinel $s collides with shipped text"
+            }
+          }
           if (-not (Test-Path -LiteralPath (Join-Path $F 'worktree') -PathType Leaf)) { throw "destroyed a non-directory at our name" }
 
           # a relative target is refused and writes nothing
@@ -291,19 +331,26 @@ jobs:
               fm = m.group(1)
               name = re.search(r'^name:\s*(\S+)', fm, re.M)
               assert name and name.group(1) == d, f'{d}: name/dir mismatch'
-              assert re.search(r'^description:', fm, re.M), f'{d}: no description'
+              desc = re.search(r'^description:\s*(\S.*)$', fm, re.M)
+              assert desc, f'{d}: description is missing or empty'
+              # a resident skill is reachable only through its description, so an
+              # empty or one-word one silently removes it from the model's reach
+              if not re.search(r'^disable-model-invocation:\s*true', fm, re.M):
+                  assert len(desc.group(1).split()) >= 8, f'{d}: resident description too thin to trigger on'
               (manual if re.search(r'^disable-model-invocation:\s*true', fm, re.M)
                       else resident).append(d)
+          RESIDENT = {'verification-before-completion', 'receiving-code-review',
+                      'diagnosing-bugs', 'spec-review', 'resolving-merge-conflicts'}
+          MANUAL   = {'grill-me', 'implement', 'tdd', 'worktree'}
+          assert set(resident) == RESIDENT, ('resident set changed', sorted(resident))
+          assert set(manual) == MANUAL, ('manual set changed', sorted(manual))
           assert len(resident) == 5 and len(manual) == 4, (resident, manual)
-          assert 'code-review' not in resident + manual, 'never shadow the built-in /code-review'
-          # the installers and the plugin blurb restate these lists; keep them honest
+          # the ownership marker's first line is a cross-version contract: change it
+          # and every existing install becomes unclaimable
+          MARKER = 'installed by lean-skills; uninstall removes only directories carrying this file'
           for path in ('install.sh', 'install.ps1'):
-              blob = io.open(path, encoding='utf-8').read()
-              tail = blob[blob.index('Resident (model-invoked)'):]
-              for s in resident:
-                  assert s in tail, f'{path}: {s} missing from the resident line'
-              for s in manual:
-                  assert s in tail, f'{path}: {s} missing from the manual line'
+              assert MARKER in io.open(path, encoding='utf-8').read(), f'{path}: the ownership marker line changed'
+          assert 'code-review' not in resident + manual, 'never shadow the built-in /code-review'
           plugin = json.load(io.open('.claude-plugin/plugin.json', encoding='utf-8'))
           mk = json.load(io.open('.claude-plugin/marketplace.json', encoding='utf-8'))
           p0 = mk['plugins'][0]
@@ -312,31 +359,56 @@ jobs:
           for d in (plugin['description'], p0['description']):
               assert blurb in d, (blurb, d)
           assert plugin['version'] == p0['version'] == mk['metadata']['version'], 'version drift'
-          assert plugin['version'] in io.open('CHANGELOG.md', encoding='utf-8').read(), 'version missing from CHANGELOG'
-          # the installer lists must name every skill and invent none
+          ver = plugin['version']
+          assert re.search(r'(?<![\d.])' + re.escape(ver) + r'(?![\d.])',
+                           io.open('CHANGELOG.md', encoding='utf-8').read()), f'CHANGELOG has no {ver} section'
+          # a resident skill must not be advertised on the manual line, or vice versa
+          # What the installer prints is the only bucket map most users ever read.
+          # Compare it for equality, not membership: a heuristic that only looked
+          # at hyphenated names could not see an invented `tdd` or a dropped one.
           import re as _re
           for path in ('install.sh', 'install.ps1'):
               blob = io.open(path, encoding='utf-8').read()
               tail = blob[blob.index('Resident (model-invoked)'):]
-              listed = set(_re.findall(r'(?<![\w-])[a-z][a-z0-9]*(?:-[a-z0-9]+)+(?![\w-])', tail))
-              listed |= {w for w in _re.findall(r'(?<![\w-])[a-z]{3,}(?![\w-])', tail)}
-              known = set(resident) | set(manual)
-              ghosts = {n for n in listed if '-' in n} - known - {'model-invoked', 'user-invoked', 'lean-skills', 'spec-review'}
-              assert not ghosts, f'{path} advertises skills that do not exist: {sorted(ghosts)}'
+              tail = _re.sub(r'(?m)^\s*(echo|Write-Host)\s*"|"\s*$', '', tail)
+              r_part, _, m_part = tail.partition('Manual (user-invoked):')
+              assert m_part, f'{path}: the manual line is gone'
+              r_part = r_part.partition('Resident (model-invoked):')[2]
+              got_r = {w for w in _re.split(r'[,\s]+', r_part) if w}
+              got_m = {w for w in _re.split(r'[,\s]+', m_part) if w}
+              assert got_r == RESIDENT, f'{path}: resident line says {sorted(got_r)}'
+              assert got_m == MANUAL, f'{path}: manual line says {sorted(got_m)}'
           # NOTICE quotes a word count for every rewritten skill. It has drifted
           # in five separate releases, so the file is now checked, not trusted.
           notice = io.open('NOTICE.md', encoding='utf-8').read()
+          # The count is whitespace-separated tokens, NOT `wc -w`: wc's answer moves
+          # with the locale (851 vs 877 for the same file) and differs between GNU
+          # and BSD, so a number written under one is unverifiable under the other.
+          assert "awk '{n+=NF}END{print n}'" in notice, 'NOTICE no longer states how the counts are taken'
+          convention = notice.split('## 逐文件')[1].split('| 本仓库文件')[0]
+          assert '不用 `wc -w`' in convention, 'NOTICE dropped the reason wc -w is not the convention'
           claims = {
-              'skills/verification-before-completion/SKILL.md': r'556 . (\d+) .',
-              'skills/receiving-code-review/SKILL.md':          r'894 . (\d+) .',
-              'skills/worktree/SKILL.md':                       r'1064 . (\d+) .',
-              'skills/spec-review/SKILL.md':                    r'1060 . \S+ (\d+) .',
+              'skills/verification-before-completion/SKILL.md': r'580 . (\d+) .',
+              'skills/receiving-code-review/SKILL.md':          r'913 . (\d+) .',
+              'skills/worktree/SKILL.md':                       r'1069 . (\d+) .',
+              'skills/spec-review/SKILL.md':                    r'1104 . \S+ (\d+) .',
           }
           for path, pat in claims.items():
               m = re.search(pat, notice)
               assert m, f'NOTICE no longer states a word count for {path}'
-              stated, actual = int(m.group(1)), len(io.open(path, encoding='utf-8').read().split())
-              assert stated == actual, f'NOTICE says {stated} words for {path}, wc -w says {actual}'
+              stated = int(m.group(1))
+              actual = len(io.open(path, encoding='utf-8').read().split())
+              assert stated == actual, f'NOTICE says {stated} words for {path}, actual {actual}'
+          # every arrow in the table must be one of the four checked above: a fifth
+          # one would be a number nothing recomputes
+          arrows = re.findall(r'(\d+) → (?:本仓库 )?(\d+) 词', notice)
+          assert len(arrows) == 4, f'unchecked word-count arrows in NOTICE: {arrows}'
+          # every shipped version must have said something about what it changed
+          # tuple-of-ints, not string order: '10' < '8' lexically, which would have
+          # silently stopped checking at 0.10.0
+          for v in re.findall(r'^## (\d+\.\d+\.\d+)', io.open('CHANGELOG.md', encoding='utf-8').read(), re.M):
+              if tuple(int(x) for x in v.split('.')) >= (0, 8, 0):
+                  assert v in notice, f'NOTICE never mentions {v}, but CHANGELOG ships it'
           print('ok: 9 skills,', len(resident), 'resident,', len(manual), 'manual; installer lists and NOTICE counts agree')
           EOF
 
@@ -395,15 +467,25 @@ jobs:
           set -euo pipefail
           M=skills/resolving-merge-conflicts/SKILL.md
           S=skills/spec-review/SKILL.md
-          # what the skills must say
-          grep -qF 'merge-base HEAD MERGE_HEAD' "$M"
-          grep -qF 'REBASE_HEAD^ REBASE_HEAD' "$M"
-          grep -qF 'CHERRY_PICK_HEAD^ CHERRY_PICK_HEAD' "$M"
-          grep -qF 'REVERT_HEAD^ REVERT_HEAD' "$M"
-          grep -qF 'git restore --staged --' "$M"
-          grep -qF 'name-status -M' "$M"
-          grep -qF 'core.quotePath=false' "$M"
-          grep -qF 'hash-object -t tree' "$M"
+          # Anchors must sit inside a prescriptive code block, not anywhere in the
+          # file: a reversed instruction that keeps the literal string nearby
+          # would otherwise pass. Extract the fenced bash blocks first.
+          awk '/^ *```bash$/,/^ *```$/' "$M" > "$RUNNER_TEMP/mc-cmds.txt"
+          awk '/^ *```bash$/,/^ *```$/' "$S" > "$RUNNER_TEMP/sr-cmds.txt"
+          test -s "$RUNNER_TEMP/mc-cmds.txt" && test -s "$RUNNER_TEMP/sr-cmds.txt"
+          for want in 'merge-base HEAD <that head>' 'REBASE_HEAD^<n> REBASE_HEAD'                       'CHERRY_PICK_HEAD^<n> CHERRY_PICK_HEAD' 'REVERT_HEAD^<n> REVERT_HEAD'                       'git restore --staged --' 'name-status -M' 'MERGE_HEAD"'                       'hash-object -t tree'; do
+            grep -qF "$want" "$RUNNER_TEMP/mc-cmds.txt" || { echo "not prescribed in a code block: $want"; exit 1; }
+          done
+          for want in 'cat-file -e' 'refs/heads/<default>:refs/remotes/origin/<default>' 'ls-remote --symref'; do
+            grep -qF "$want" "$RUNNER_TEMP/sr-cmds.txt" || { echo "not prescribed in a code block: $want"; exit 1; }
+          done
+          # every prescribed git command that prints paths must disable octal escaping
+          path_cmds=$(grep -E '^ *git .*(--name-only|--name-status|--porcelain)' "$RUNNER_TEMP/mc-cmds.txt" || true)
+          test "$(grep -c . <<<"$path_cmds")" -ge 6 || { echo "the path-printing recipes vanished"; exit 1; }
+          unquoted=$(grep -vF -- '-c core.quotePath=false' <<<"$path_cmds" || true)
+          test -z "$unquoted" || { echo "lost core.quotePath=false:"; echo "$unquoted"; exit 1; }
+          # prose-level anchors: these are warnings, not commands, so they live
+          # outside the fenced blocks the loop above checks
           grep -qF 'Never fall back to `@{upstream}`' "$S"
           grep -qF 'baseRefOid' "$S"
           # and what they must never say again - each of these shipped as a bug once
@@ -572,7 +654,7 @@ jobs:
           S=skills/spec-review/SKILL.md
           grep -qF 'rebase-merge/onto' "$M"
           grep -qF 'sequencer/head' "$M"
-          grep -qF 'git diff --name-only HEAD^1 HEAD' "$M"
+          grep -qF 'diff --name-only HEAD^<n> HEAD' "$M"
           grep -qF 'git cat-file -e' "$S"
           grep -qF 'refs/heads/<default>:refs/remotes/origin/<default>' "$S"
           if grep -qF 'git rev-parse ORIG_HEAD)' "$M"; then echo "ORIG_HEAD is back as the boundary"; exit 1; fi
@@ -678,13 +760,21 @@ jobs:
               'platform parity': 'this check itself',
           }
           steps = yaml.safe_load(io.open('.github/workflows/ci.yml', encoding='utf-8'))['jobs']['install']['steps']
+          # an exemption for a step that no longer exists is one a future step
+          # could inherit by name without anyone deciding to
+          stale = set(allowed) - {s.get('name') for s in steps}
+          assert not stale, f'allowed list names steps that do not exist: {sorted(stale)}'
           bad = []
-          for s in steps:
-              name = s.get('name')
-              if not name or name in allowed:
+          names = [s.get('name') for s in steps if s.get('name')]
+          assert len(names) == len(set(names)), f'duplicate step names: {names}'
+          for idx, s in enumerate(steps):
+              if 'run' not in s:          # checkout and other actions
                   continue
-              cond = s.get('if', '')
-              if cond and "!= 'Windows'" not in cond:
+              name = s.get('name') or f'<unnamed step #{idx}>'
+              if name in allowed:
+                  continue
+              cond = (s.get('if') or '').strip()
+              if cond and cond != "runner.os != 'Windows'":
                   bad.append((name, cond))
           if bad:
               for n, c in bad:

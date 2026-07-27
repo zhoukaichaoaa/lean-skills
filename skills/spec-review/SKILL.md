@@ -30,6 +30,7 @@ With no base ref, work down this list:
 
    ```bash
    git cat-file -e <baseRefOid>^{commit} || git fetch origin <baseRefName>
+   git cat-file -e <baseRefOid>^{commit}   # recheck: fetch can succeed without bringing this object
    ```
 
    For a fork PR, `isCrossRepository` is true and the base lives on the upstream remote.
@@ -43,9 +44,11 @@ With no base ref, work down this list:
 2. **No PR at all** — the remote's default branch:
 
    ```bash
-   git symbolic-ref refs/remotes/origin/HEAD     # absent in --single-branch and older clones
-   git ls-remote --symref origin HEAD            # asks the remote; needs no local ref
+   git ls-remote --symref origin HEAD            # asks the remote — the only current answer
+   git symbolic-ref refs/remotes/origin/HEAD     # offline fallback; see the caveat below
    ```
+
+   Ask the remote **first**. `refs/remotes/origin/HEAD` is written once at clone time and `git fetch` never refreshes it, so after the project renames its default branch it keeps returning the old name with exit 0 — a valid branch that is no longer the default. Use it only when the remote is unreachable, and say in the report that the answer may be stale. (`git remote set-head origin -a` repairs it.)
 
    `ls-remote` **only asks** — it downloads nothing. In a `--single-branch` or shallow clone (the normal shape in CI) the default branch's commit is not in the object store, so `merge-base` against it exits 128 and the review stops for no good reason. Fetch it first:
 
@@ -75,7 +78,7 @@ Read any untracked files that belong to the change; they are additions the diff 
 
 ## 2. Find the spec
 
-In order: the path the caller passed; a tracker issue referenced in the commit messages (`#123`, `Closes #45` — fetch with `gh issue view <n>`); a plan from `/grill-me` at `"$(git rev-parse --git-common-dir)/../.plans"` (that path resolves to the main checkout from inside a worktree too, where an untracked `.plans/` never appears); a spec file under `docs/`, `specs/`, or `.scratch/`.
+In order: the path the caller passed; a tracker issue referenced in the commit messages (`#123`, `Closes #45` — fetch with `gh issue view <n>`); a plan from `/grill-me` at `"$(git rev-parse --git-common-dir)/../.plans"` (that resolves to the main checkout from inside a worktree too; inside a **submodule** it lands in `.git/modules/` instead, so check `git rev-parse --show-superproject-working-tree` and use the superproject when it is non-empty, and outside a repository fall back to `./.plans`); a spec file under `docs/`, `specs/`, or `.scratch/`.
 
 **Take a plan only if it matches this change** — its slug or title names the branch or feature. Several candidates, or none that match: report that and stop. (Do not judge by file age: a plan written before a `git pull` is older than the base commit and still the right plan.) A stale plan from another feature yields confident, entirely fictional findings, which is worse than no review.
 
