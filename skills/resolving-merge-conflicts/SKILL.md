@@ -18,22 +18,31 @@ description: Use when git reports conflicts during a merge, rebase, cherry-pick,
 
    ```bash
    git diff --cached --name-only HEAD                                   # everything staged
-   git diff --name-only $(git merge-base HEAD MERGE_HEAD) MERGE_HEAD    # merge: what it brings
-   git diff --name-only REBASE_HEAD^ REBASE_HEAD                        # rebase / cherry-pick / revert:
-                                                                        # the single commit being applied
+
+   # what the operation brings — use the row you matched in step 1, verbatim:
+   git diff --name-only $(git merge-base HEAD MERGE_HEAD) MERGE_HEAD    # merge
+   git diff --name-only REBASE_HEAD^ REBASE_HEAD                        # rebase
+   git diff --name-only CHERRY_PICK_HEAD^ CHERRY_PICK_HEAD              # cherry-pick
+   git diff --name-only REVERT_HEAD^ REVERT_HEAD                        # revert
    ```
 
-   Diff from the **merge base**, not from `HEAD`: `HEAD..MERGE_HEAD` also lists every file your side changed since the base, so a file the user edited that the merge never touches would be misfiled as the operation's.
+   Run the one that matches; the others name refs that do not exist and fail with `fatal: ambiguous argument`. For merge, diff from the **merge base**, not from `HEAD`: `HEAD..MERGE_HEAD` also lists every file your side changed since the base, so a file the user edited that the merge never touches would be misfiled as the operation's.
 
-   Staged files the operation does not bring are **the user's**, as are working-tree-only changes — first column blank in `git status --porcelain` (` M`, ` D`) — and untracked files (`??`). Write that list down.
+   Now sort what is left into three lists, because step 3 treats them differently:
 
-3. **Take the user's work out of the index before you resolve anything.** This is the step that makes the promise in step 6 achievable:
+   - **Staged, not brought by the operation** — the user's, and *in the index*. These are the ones step 3 has to act on.
+   - **Working-tree only** — first column blank in `git status --porcelain` (` M`, ` D`). Theirs, but not in the index; nothing to undo.
+   - **Untracked** (`??`). Theirs, and git does not know them at all.
+
+3. **Take the user's staged work out of the index before you resolve anything.** This is the step that makes the promise in step 7 achievable:
 
    ```bash
-   git restore --staged <each user file>      # older git: git reset HEAD -- <file>
+   git restore --staged -- <only the staged-not-brought list>   # older git: git reset HEAD -- <paths>
    ```
 
-   The edits stay in the working tree; they are simply no longer queued for the operation's commit. Tell the user what you unstaged and why. If a file is *both* conflicted and something they were editing, stop and ask — you cannot split that automatically.
+   **Only that first list.** Working-tree-only and untracked files are not in the index; passing an untracked path makes git reject the *whole* command (`error: pathspec ... did not match any file(s) known to git`), so the staged files you did mean to rescue stay staged and get committed anyway. Record the other two lists in your report and leave them alone.
+
+   Confirm it took: `git diff --cached --name-only HEAD` should now list only what the operation brings. Tell the user what you unstaged and why. If a file is *both* conflicted and something they were editing, stop and ask — you cannot split that automatically.
 
    (Note: git refuses to *start* a merge, rebase, cherry-pick or revert against a dirty index, so anything staged here was staged after the conflict appeared — by them or by you.)
 

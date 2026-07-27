@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.8.1 — 2026-07-27
+
+第四方审计。三条 Important 全部先复现再修，且全部出在 0.8.0 我自己重写的技能里。
+
+- **`git restore --staged` 会被 untracked 路径整条打掉。** 第 2 步把 staged、仅工作区、untracked 三类都归为「用户的」，第 3 步却让它们一起 restore。实测：`git restore --staged -- s.txt u.txt` 因 `u.txt` 不在索引里而报 `pathspec did not match`，**整条命令失败，真正 staged 的 `s.txt` 原样留在索引里**，随后照样进合并提交 —— 正是这一步要防的事。现在三类分开列出，只对 staged 那一类执行 restore，并要求 restore 后复查索引。
+- **cherry-pick / revert 冲突下命令写死了 `REBASE_HEAD`。** 代码块里只有 `REBASE_HEAD^ REBASE_HEAD` 一行，注释却说它同时适用于三种操作。实测 cherry-pick 冲突中该命令 `fatal: ambiguous argument`。四种操作各写一行，并注明只跑第 1 步表格里匹配上的那一条。
+- **`spec-review` 拿 `@{upstream}` 当兜底基线，会漏掉整个已推送的分支。** feature branch 跟踪的是 `origin/feature`，一旦推送，`merge-base HEAD @{upstream}` 就等于 HEAD，diff 是空的 —— 只审到未提交的碎片，分支上每个提交静默逃过。实测确认。兜底改为：PR 的 base 分支 → `origin/HEAD` 的默认分支 → 报告「无基线」并停止；并明确写出**永远不要退回 `@{upstream}`** 及其原因。
+
+**CI 新增 git 配方回归**（这个技能连续三轮出问题，靠读代码守不住）：真实 fixture 跑 merge / cherry-pick / 已推送分支三种场景，断言合并范围取自 merge base、`HEAD..MERGE_HEAD` 确实会多算、只 restore staged 那一类能成功而带 untracked 会失败、用户的暂存文件不进合并提交、仅工作区与 untracked 改动仍在、cherry-pick 下 `REBASE_HEAD` 确实解析不了、`@{upstream}` 在已推送分支上确实塌成空。命令锚点绑回 SKILL.md 原文。
+
+**其余**
+
+- 安装器的重启提示改为按情况区分：首次创建目标目录才提示重启，之后按官方的热生效行为提示无需重启。
+- README 的升级段落此前既说「以退出码 3 告知」又说「静默地什么都不做」，自相矛盾；改为如实描述（会装上全新技能、已有的 8 个不动、退出码会说但输出不红）。
+- `--adopt` 现在逐个列出将被接管替换的目录，而不是默默覆盖。
+- CI 步骤名 `code-review's diff recipe` 更正为 `spec-review's`。
+
 ## 0.8.0 — 2026-07-27
 
 三名独立审计员并行审查 `a4e3d10`。四个 Critical 全部先复现再修。

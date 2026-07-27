@@ -16,7 +16,15 @@ You run as a forked subagent with none of the caller's conversation. Everything 
 
 ## 1. Pin the change
 
-`$ARGUMENTS` carries a base ref (a commit SHA, `main`, `HEAD~5`) and optionally a spec path — `base=<sha> spec=<path>`, or just the two values. With no base ref, try `git merge-base HEAD @{upstream}` and then `git merge-base HEAD origin/HEAD`; if neither resolves — a branch created by `git worktree add -b` has no upstream — stop and make that the whole report. You are a forked subagent: you cannot ask a question and wait for an answer.
+`$ARGUMENTS` carries a base ref (a commit SHA, `main`, `HEAD~5`) and optionally a spec path — `base=<sha> spec=<path>`, or just the two values.
+
+With no base ref, work down this list and stop at the first that resolves:
+
+1. The PR's base branch, if this branch has an open PR — `gh pr view --json baseRefName -q .baseRefName`.
+2. The remote's default branch — `git symbolic-ref refs/remotes/origin/HEAD` (or `origin/main`, `origin/master`).
+3. Nothing. Make "no base ref, and none could be inferred" the whole report.
+
+**Never fall back to `@{upstream}`.** On a feature branch that has been pushed, the upstream *is* this branch: `git merge-base HEAD @{upstream}` returns HEAD, the diff comes back empty, and you review only the uncommitted scraps while every commit on the branch escapes silently. You are a forked subagent — you cannot ask a question and wait for an answer, so a wrong default here is never corrected.
 
 ```bash
 git merge-base <base-ref> HEAD          # run it, read the SHA it prints

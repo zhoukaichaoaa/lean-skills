@@ -224,7 +224,7 @@ jobs:
           print('ok: 9 skills,', len(resident), 'resident,', len(manual), 'manual; installer lists agree')
           EOF
 
-      - name: code-review's diff recipe captures every change class
+      - name: spec-review's diff recipe captures every change class
         if: runner.os == 'Linux'
         shell: bash
         run: |
@@ -270,6 +270,73 @@ jobs:
             echo "expected merge-base against a bogus ref to fail"; exit 1
           fi
           echo "diff recipe: all change classes visible; degradation modes confirmed"
+
+      - name: git recipes in the skills actually run
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          M=skills/resolving-merge-conflicts/SKILL.md
+          S=skills/spec-review/SKILL.md
+          grep -qF 'git merge-base HEAD MERGE_HEAD) MERGE_HEAD' "$M"
+          grep -qF 'REBASE_HEAD^ REBASE_HEAD' "$M"
+          grep -qF 'CHERRY_PICK_HEAD^ CHERRY_PICK_HEAD' "$M"
+          grep -qF 'REVERT_HEAD^ REVERT_HEAD' "$M"
+          grep -qF 'git restore --staged --' "$M"
+          grep -qF 'Never fall back to' "$S"
+
+          new_repo() {
+            rm -rf "$1"; git init -q "$1"; cd "$1"
+            git config user.email ci@ci; git config user.name ci
+            echo base > f.txt; echo base > side.txt
+            git add -A; git commit -qm base
+            git checkout -qb feat; echo theirs > f.txt; git commit -aqm theirs
+            git checkout -q master 2>/dev/null || git checkout -q main
+            echo mine > f.txt; echo ours-only > side.txt; git commit -aqm mine
+          }
+
+          new_repo "$RUNNER_TEMP/r-merge"
+          git merge feat >/dev/null 2>&1 || true
+          BRINGS=$(git diff --name-only "$(git merge-base HEAD MERGE_HEAD)" MERGE_HEAD)
+          test "$BRINGS" = "f.txt" || { echo "merge brings [$BRINGS], want f.txt"; exit 1; }
+          if ! git diff --name-only HEAD MERGE_HEAD | grep -q side.txt; then
+            echo "fixture no longer shows why HEAD..MERGE_HEAD is the wrong range"; exit 1
+          fi
+          echo user > staged.txt; git add staged.txt
+          echo more >> side.txt
+          echo note > untracked.txt
+          USERS=$(comm -23 <(git diff --cached --name-only HEAD | sort) <(echo "$BRINGS" | sort))
+          test "$USERS" = "staged.txt" || { echo "user set [$USERS], want staged.txt"; exit 1; }
+          git restore --staged -- $USERS
+          if git restore --staged -- untracked.txt 2>/dev/null; then
+            echo "expected git restore --staged to reject an untracked path"; exit 1
+          fi
+          echo resolved > f.txt; git add f.txt; git commit -qm merged
+          git show --name-only --format= HEAD | grep -qx f.txt
+          if git show --name-only --format= HEAD | grep -q staged.txt; then
+            echo "the user's staged file landed in the merge commit"; exit 1
+          fi
+          git status --porcelain | grep -q '^?? untracked.txt'
+          git status --porcelain | grep -q '^ M side.txt'
+
+          new_repo "$RUNNER_TEMP/r-cp"
+          git cherry-pick feat >/dev/null 2>&1 || true
+          test -f "$(git rev-parse --git-dir)/CHERRY_PICK_HEAD"
+          git diff --name-only CHERRY_PICK_HEAD^ CHERRY_PICK_HEAD | grep -qx f.txt
+          if git diff --name-only REBASE_HEAD^ REBASE_HEAD >/dev/null 2>&1; then
+            echo "REBASE_HEAD resolved during a cherry-pick; the per-operation split is moot"; exit 1
+          fi
+
+          new_repo "$RUNNER_TEMP/r-up"
+          git init -q --bare "$RUNNER_TEMP/origin.git"
+          git remote add origin "$RUNNER_TEMP/origin.git"
+          git push -q origin HEAD:main
+          git checkout -qb feature; echo w > w.txt; git add -A; git commit -qm w
+          git push -q -u origin feature
+          test "$(git merge-base HEAD '@{upstream}')" = "$(git rev-parse HEAD)"
+          test -z "$(git diff --name-only "$(git merge-base HEAD '@{upstream}')")"
+          git merge-base HEAD origin/main >/dev/null
+          echo "git recipes: merge range, restore split, per-operation refs and base selection all behave as documented"
 
       - name: official plugin validation (strict)
         if: runner.os == 'Linux'

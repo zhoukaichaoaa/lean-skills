@@ -178,6 +178,9 @@ for dir in "$src"/*/; do
 
   # Anything at our name without our marker is either yours or a pre-0.7.0
   # install of ours. We cannot tell, so we do not guess: keep it unless --adopt.
+  if [ -e "$dest_abs/$name" ] && ! is_ours "$dest_abs/$name" && [ "$adopt" -eq 1 ]; then
+    echo "  adopting  $name (had no marker; its contents are being replaced)" >&2
+  fi
   if [ -e "$dest_abs/$name" ] && ! is_ours "$dest_abs/$name" && [ "$adopt" -eq 0 ]; then
     echo "  kept      $name (no ownership marker)"
     kept=$((kept + 1))
@@ -233,7 +236,12 @@ if [ "$unmarked" -gt 0 ]; then
   echo "this is your upgrade, and it did not happen: rerun with --adopt." >&2
   exit 3
 fi
-echo "Restart your Claude Code session to pick them up. Remove later with --uninstall."
+if [ -n "$created_levels" ]; then
+  echo "First install here — restart your Claude Code session to pick the skills up."
+else
+  echo "Claude Code picks these up in the current session; no restart needed."
+fi
+echo "Remove later with --uninstall."
 echo
 echo "Resident (model-invoked): verification-before-completion, receiving-code-review,"
 echo "                          diagnosing-bugs, spec-review, resolving-merge-conflicts"

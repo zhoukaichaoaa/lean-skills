@@ -162,6 +162,9 @@ foreach ($dir in $srcDirs) {
 
   # Anything at our name without our marker is either yours or a pre-0.7.0
   # install of ours. We cannot tell, so we do not guess: keep it unless -Adopt.
+  if ((Test-Path -LiteralPath $target) -and -not (Test-Ours $target) -and $Adopt) {
+    Write-Host "  adopting  $($dir.Name) (had no marker; its contents are being replaced)"
+  }
   if ((Test-Path -LiteralPath $target) -and -not (Test-Ours $target) -and -not $Adopt) {
     Write-Host "  kept      $($dir.Name) (no ownership marker)"
     $kept++
@@ -212,7 +215,12 @@ if ($unmarked -gt 0) {
   Write-Warning "$unmarked of those carry no ownership marker. If they are yours, leave them. If you installed lean-skills before 0.7.0 - which did not write markers - this is your upgrade, and it did not happen: rerun with -Adopt."
   exit 3
 }
-Write-Host "Restart your Claude Code session to pick them up. Remove later with -Uninstall."
+if ($createdLevels.Count -gt 0) {
+  Write-Host "First install here - restart your Claude Code session to pick the skills up."
+} else {
+  Write-Host "Claude Code picks these up in the current session; no restart needed."
+}
+Write-Host "Remove later with -Uninstall."
 Write-Host ""
 Write-Host "Resident (model-invoked): verification-before-completion, receiving-code-review,"
 Write-Host "                          diagnosing-bugs, spec-review, resolving-merge-conflicts"
