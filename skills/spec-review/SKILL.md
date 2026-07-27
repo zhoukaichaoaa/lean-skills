@@ -26,7 +26,15 @@ With no base ref, work down this list:
    gh pr view --json baseRefName,baseRefOid,isCrossRepository
    ```
 
-   Use **`baseRefOid`** — it is the base commit itself, so no branch name has to be turned into a ref. If the object is missing locally, fetch it (`git fetch origin <baseRefName>`; for a fork PR, `isCrossRepository` is true and the base lives on the upstream remote).
+   Use **`baseRefOid`** — it is the base commit itself, so no branch name has to be turned into a ref. Confirm the object is actually here before using it, and fetch it if not:
+
+   ```bash
+   git cat-file -e <baseRefOid>^{commit} || git fetch origin <baseRefName>
+   ```
+
+   For a fork PR, `isCrossRepository` is true and the base lives on the upstream remote.
+
+   **If `gh` fails rather than reporting no PR, stop.** Not installed, not authenticated, offline, rate-limited, an API error — none of those are evidence that there is no pull request. Falling through to step 2 in that state reviews a PR against the wrong base and says nothing about it. Only "no pull requests found" earns the fallback; report anything else verbatim.
 
    Do **not** use `baseRefName` as a ref. It is a branch name — `dev`, not `origin/dev`. When no local `dev` exists the command fails loudly, which is survivable; the dangerous case is when a *stale* local `dev` exists, because then `git merge-base dev HEAD` succeeds and hands you a base from whenever that branch was last fetched, quietly adding other people's commits to the review.
 
@@ -39,7 +47,16 @@ With no base ref, work down this list:
    git ls-remote --symref origin HEAD            # asks the remote; needs no local ref
    ```
 
-   Only if both fail, try `origin/main` then `origin/master` — and say in the report that the default branch was **guessed**. A repository whose default is `dev` or `trunk` may well also have a `main`, and `origin/main` will resolve happily against the wrong base.
+   `ls-remote` **only asks** — it downloads nothing. In a `--single-branch` or shallow clone (the normal shape in CI) the default branch's commit is not in the object store, so `merge-base` against it exits 128 and the review stops for no good reason. Fetch it first:
+
+   ```bash
+   git fetch origin "+refs/heads/<default>:refs/remotes/origin/<default>"
+   git merge-base refs/remotes/origin/<default> HEAD
+   ```
+
+   If `merge-base` still fails afterwards, the clone is shallow past the common ancestor: say so and stop, or ask the user before deepening (`--deepen`), which can be expensive.
+
+   Only if both lookups fail, try `origin/main` then `origin/master` — and say in the report that the default branch was **guessed**. A repository whose default is `dev` or `trunk` may well also have a `main`, and `origin/main` will resolve happily against the wrong base.
 
 3. Nothing resolves. Make "no base ref, and none could be inferred" the whole report.
 

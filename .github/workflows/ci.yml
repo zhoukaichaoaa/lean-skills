@@ -548,6 +548,102 @@ jobs:
           fi
           echo "worktree recipes: ignore gate, WTDIR consistency, plan path across a worktree, teardown"
 
+      - name: completion-scope and remote-object recipes
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          M=skills/resolving-merge-conflicts/SKILL.md
+          S=skills/spec-review/SKILL.md
+          grep -qF 'rebase-merge/onto' "$M"
+          grep -qF 'sequencer/head' "$M"
+          grep -qF 'git diff --name-only HEAD^1 HEAD' "$M"
+          grep -qF 'git cat-file -e' "$S"
+          grep -qF 'refs/heads/<default>:refs/remotes/origin/<default>' "$S"
+          if grep -qF 'git rev-parse ORIG_HEAD)' "$M"; then echo "ORIG_HEAD is back as the boundary"; exit 1; fi
+
+          seed() {
+            rm -rf "$1"; git init -q "$1"; cd "$1"
+            git config user.email ci@ci; git config user.name ci
+            echo base > f.txt; git add -A; git commit -qm c0
+            git checkout -qb feat; echo theirs > f.txt; git commit -aqm feat1
+            git checkout -q master 2>/dev/null || git checkout -q main
+            echo mine > f.txt; git commit -aqm mine
+          }
+
+          # single cherry-pick: ORIG_HEAD does not exist, HEAD is the boundary
+          seed "$RUNNER_TEMP/s-cp"
+          BOUND=$(git rev-parse HEAD)
+          git cherry-pick feat >/dev/null 2>&1 || true
+          if git rev-parse ORIG_HEAD >/dev/null 2>&1; then
+            echo "fixture no longer shows cherry-pick leaving ORIG_HEAD unset"; exit 1
+          fi
+          echo wip > user.txt
+          echo resolved > f.txt; git add f.txt
+          git -c core.editor=true cherry-pick --continue >/dev/null 2>&1
+          git log --name-only --oneline "$BOUND..HEAD" | grep -qx f.txt
+          git status --porcelain -- user.txt | grep -q 'user.txt'
+
+          # rebase onto a base that already carries other commits
+          seed "$RUNNER_TEMP/s-rb"
+          git checkout -q feat; echo u > user-wip.txt; git add -A; git commit -qm userwork
+          git checkout -q master 2>/dev/null || git checkout -q main
+          echo extra > onbase.txt; git add -A; git commit -qm already-on-base
+          git checkout -q feat
+          git rebase master >/dev/null 2>&1 || git rebase main >/dev/null 2>&1 || true
+          ONTO=$(cat .git/rebase-merge/onto 2>/dev/null || cat .git/rebase-apply/onto 2>/dev/null)
+          test -n "$ONTO" || { echo "no onto recorded during rebase"; exit 1; }
+          echo resolved > f.txt; git add f.txt
+          git -c core.editor=true rebase --continue >/dev/null 2>&1
+          git log --name-only --oneline "$ONTO..HEAD" | grep -q user-wip.txt
+          if git log --name-only --oneline "$ONTO..HEAD" | grep -qx onbase.txt; then
+            echo "the onto boundary still sweeps in commits already on the base"; exit 1
+          fi
+          if ! git log --name-only --oneline "$(git rev-parse ORIG_HEAD)..HEAD" | grep -qx onbase.txt; then
+            echo "fixture no longer shows why ORIG_HEAD is the wrong boundary"; exit 1
+          fi
+
+          # merge: first-parent diff is what the merge landed on our side
+          seed "$RUNNER_TEMP/s-mg"
+          git merge feat >/dev/null 2>&1 || true
+          echo wip > user.txt
+          echo resolved > f.txt; git add f.txt; git commit -qm merged
+          git diff --name-only HEAD^1 HEAD | grep -qx f.txt
+          git status --porcelain -- user.txt | grep -q 'user.txt'
+
+          # revert
+          seed "$RUNNER_TEMP/s-rv"
+          BOUND=$(git rev-parse HEAD)
+          git revert --no-edit HEAD >/dev/null 2>&1 || true
+          test -f .git/REVERT_HEAD || { echo "revert did not conflict as expected"; git revert --abort 2>/dev/null || true; }
+          if [ -f .git/REVERT_HEAD ]; then
+            echo resolved > f.txt; git add f.txt
+            git -c core.editor=true revert --continue >/dev/null 2>&1
+            git log --name-only --oneline "$BOUND..HEAD" | grep -qx f.txt
+          fi
+
+          # ls-remote resolves a name but downloads nothing
+          B="$RUNNER_TEMP/s-rem"; rm -rf "$B"; mkdir -p "$B"; cd "$B"
+          git init -q --bare origin.git
+          git init -q src; cd src; git config user.email ci@ci; git config user.name ci
+          echo a > f.txt; git add -A; git commit -qm base; git branch -M main
+          git remote add origin ../origin.git; git push -q origin main
+          git checkout -qb feature; echo b >> f.txt; git commit -aqm work; git push -q origin feature
+          git checkout -q main; echo only > m.txt; git add -A; git commit -qm main-only; git push -q origin main
+          cd "$B"; git --git-dir=origin.git symbolic-ref HEAD refs/heads/main
+          git clone -q --single-branch --branch feature "file://$B/origin.git" sc
+          cd sc
+          DEF=$(git ls-remote --symref origin HEAD | awk '/^ref:/{sub("refs/heads/","",$2); print $2}')
+          test "$DEF" = main || { echo "ls-remote gave [$DEF]"; exit 1; }
+          SHA=$(git ls-remote origin "refs/heads/$DEF" | cut -f1)
+          if git cat-file -e "$SHA^{commit}" 2>/dev/null; then
+            echo "fixture no longer shows ls-remote leaving the object absent"; exit 1
+          fi
+          git fetch -q origin "+refs/heads/$DEF:refs/remotes/origin/$DEF"
+          git cat-file -e "$SHA^{commit}"
+          git merge-base "refs/remotes/origin/$DEF" HEAD >/dev/null
+          echo "completion scope: per-operation boundaries hold; ls-remote needs the fetch the skill now prescribes"
+
       - name: platform parity
         if: runner.os == 'Linux'
         shell: bash

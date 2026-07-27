@@ -9,12 +9,14 @@ Run every command below and **read what it printed**. Never wrap one in `$(...)`
 
 1. **Identify the operation and its incoming side.** Which one is in progress decides both how it ends and what counts as "its" changes. Look in `$(git rev-parse --git-dir)` — `--git-dir`, not `--git-common-dir`: inside a linked worktree the conflict state lives in that worktree's own directory.
 
-   | Present | Operation | Incoming ref | Finish with |
-   |---|---|---|---|
-   | `MERGE_HEAD` | merge (including `pull`) | `MERGE_HEAD` | `git commit` or `git merge --continue` |
-   | `rebase-merge/` or `rebase-apply/` | rebase | `REBASE_HEAD` | `git rebase --continue` |
-   | `CHERRY_PICK_HEAD` | cherry-pick | `CHERRY_PICK_HEAD` | `git cherry-pick --continue` |
-   | `REVERT_HEAD` | revert | `REVERT_HEAD` | `git revert --continue` |
+   | Present | Operation | Incoming ref | Finish with | Where the operation started |
+   |---|---|---|---|---|
+   | `MERGE_HEAD` | merge (including `pull`) | `MERGE_HEAD` | `git commit` or `git merge --continue` | `git rev-parse HEAD` |
+   | `rebase-merge/` or `rebase-apply/` | rebase | `REBASE_HEAD` | `git rebase --continue` | `cat .git/rebase-merge/onto` (or `rebase-apply/onto`) |
+   | `CHERRY_PICK_HEAD` | cherry-pick | `CHERRY_PICK_HEAD` | `git cherry-pick --continue` | `cat .git/sequencer/head` if it exists, else `git rev-parse HEAD` |
+   | `REVERT_HEAD` | revert | `REVERT_HEAD` | `git revert --continue` | same as cherry-pick |
+
+   **Record that last column now**, before you touch anything — it is the boundary step 9 checks against, and after the operation finishes there is no way to recover it. `ORIG_HEAD` is not that boundary: a single cherry-pick never sets it (`git rev-parse ORIG_HEAD` exits 128), and for a rebase it points at the pre-rebase branch tip, so `ORIG_HEAD..HEAD` also sweeps in commits that were already sitting on the new base.
 
 2. **Work out what the operation brings.** For a merge, that is everything from the merge base to the incoming tip — **not** `HEAD..MERGE_HEAD`, which also lists every file your own side changed since the base:
 
@@ -68,17 +70,28 @@ Run every command below and **read what it printed**. Never wrap one in `$(...)`
 
 7. Discover the project's **automated checks** and run them — typically typecheck, then tests, then format. Fix anything the operation broke.
 
-8. **Finish it.** Stage the conflicted files and whatever you edited in step 7, then run the finishing command for this operation from step 1. If rebasing or cherry-picking, note the SHA you started from (`git rev-parse ORIG_HEAD`) and repeat from step 1 for each subsequent conflicted commit until git reports the operation complete.
+8. **Finish it.** Stage the conflicted files and whatever you edited in step 7, then run the finishing command for this operation from step 1. If rebasing or cherry-picking, repeat from step 1 for each subsequent conflicted commit until git reports the operation complete — the boundary you recorded at the first conflict stays valid for the whole run.
+
+9. **Prove the user's work survived.** Ask it of the paths themselves, which is exact and operation-agnostic:
+
+   ```bash
+   git status --porcelain -- <every path you listed as the user's in step 3>
+   ```
+
+   Each must still appear. A path that has gone quiet was committed by the operation.
+
+   Then cross-check against what the operation actually recorded, using the boundary from step 1:
+
+   ```bash
+   git log --name-only --oneline <boundary>..HEAD   # rebase, cherry-pick, revert
+   git diff --name-only HEAD^1 HEAD                 # merge: what landed relative to our side
+   ```
+
+   `git show HEAD` is not enough: a multi-commit rebase buries the file in an earlier commit, and on a merge commit `--stat` alone hides it.
 
 ## Completion criterion
 
-Long-form `git status` — not `--porcelain`, which stays silent about an operation stopped at a `break` — reports no operation in progress and no unresolved hunks; the project's checks pass; and every path you listed as the user's is still uncommitted. Prove that last one across **every** commit the operation produced, not just the tip:
-
-```bash
-git log --name-only --oneline <the SHA from step 8>..HEAD
-```
-
-A multi-commit rebase buries the user's file in an earlier commit, where `git show HEAD` cannot see it.
+Long-form `git status` — not `--porcelain`, which stays silent about an operation stopped at a `break` — reports no operation in progress and no unresolved hunks; the project's checks pass; and step 9 found every path you listed as the user's still uncommitted, by both of its checks.
 
 ---
 

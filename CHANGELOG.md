@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.9.2 — 2026-07-27
+
+第六方审计（针对 v0.9.0）。三条 Important 全部先复现再修。
+
+- **完成范围的边界是错的。** Step 8 让用 `git rev-parse ORIG_HEAD` 作起点，实测：单次 cherry-pick **根本不设 `ORIG_HEAD`**（exit 128）；rebase 虽设，但 `ORIG_HEAD..HEAD` 会把**新 base 上原本就有的提交**一起算进来（夹具里 `onbase.txt` 混入，会误报用户改动被卷走）；merge 和 revert 则从未记录过任何 SHA，判据却要求"Step 8 的 SHA"。改为在第 1 步的表格里按操作各自记录边界（merge/单次 cherry-pick/revert 用当前 `HEAD`，rebase 用 `rebase-merge/onto`，多提交序列用 `.git/sequencer/head`），并新增第 9 步：先对用户路径直接问 `git status --porcelain -- <paths>`（精确且与操作无关），再用边界交叉核对，merge 用 `git diff --name-only HEAD^1 HEAD`。
+- **`ls-remote` 只问不取。** `spec-review` 解析出默认分支后直接 `merge-base`，而在 `--single-branch` / 浅克隆（CI 的常态）里那个对象根本不在本地。实测（`file://` 真实传输）：`ls-remote` 正确返回 `main @ d4ca7a5`，但 `cat-file -e` 与 `merge-base` 双双 exit 128 —— 评审就此停住。补上 `git fetch origin "+refs/heads/<default>:refs/remotes/origin/<default>"`，并说明 fetch 后仍失败意味着浅克隆边界，要停下或经授权 deepen。
+- **`gh` 失败不等于没有 PR。** 未安装、未认证、离线、限流、API 报错都不是"没有 PR"的证据，而原文会滑到默认分支继续审。改为：只有明确的 "no pull requests found" 才允许回退，其余原样报错并停止。同时 `baseRefOid` 拿到后要先 `git cat-file -e` 确认对象在本地，不在就 fetch。
+
+**CI** 新增按审计要求的五种完成范围夹具（单次 cherry-pick、rebase 到已有提交的 base、merge 的 first-parent、revert、边界与 `ORIG_HEAD` 的对照）以及 `ls-remote` 不下载对象的夹具，全部在 Linux 与 macOS 两个平台跑。
+
+### 关于被移动过的 v0.9.0 标签
+
+审计指出：`v0.9.0` 的 Release 发布于 `6874a51`，而我随后为修 macOS CI 覆盖用 `git tag -f` 把标签移到了 `f4c2810`。同一版本号在不同时间指向不同内容，破坏可复现构建与供应链追踪。**这是我的错误做法。**
+
+处理：标签**不再移动**（再动一次只会更糟），修复以 0.9.1 / 0.9.2 发布。发布清单加一条：**标签一经推送即不可变** —— 发版前先确认标签不存在，修复一律走新版本号。需要可复现安装的场景请钉 commit SHA 而不是 `v0.9.0`。
+
 ## 0.9.1 — 2026-07-27
 
 macOS 覆盖补齐 —— 上一版 macOS 只执行了 CI 五个步骤里的一个。
@@ -237,4 +253,4 @@ CI 的 git 配方回归新增一例：推一个 `dev` 分支到远端后，断�
 
 ---
 
-**发布清单**：**任何改动都要 Windows 与 macOS 双平台落地并各自有断言**（`install.sh` 与 `install.ps1` 同时改；CI 步骤默认 `if: runner.os != 'Windows'`，单平台步骤须在 `platform parity` 的豁免表里写明理由）→ 改 manifests 版本号 → **更新 NOTICE 的逐文件行并用 `wc -w` 重算词数** → 更新本文件 → 本地把 CI 的每条腿在干净克隆上原样跑一遍 → commit & push → CI 绿 → `git tag vX.Y.Z && git push --tags` → `gh release create` → 核对 GitHub description → `claude plugin validate --strict .`
+**发布清单**：**标签一经推送即不可变**（发版前确认 `git ls-remote --tags origin` 里没有该标签；任何修复走新版本号，绝不 `tag -f`）→ **任何改动都要 Windows 与 macOS 双平台落地并各自有断言**（`install.sh` 与 `install.ps1` 同时改；CI 步骤默认 `if: runner.os != 'Windows'`，单平台步骤须在 `platform parity` 的豁免表里写明理由）→ 改 manifests 版本号 → **更新 NOTICE 的逐文件行并用 `wc -w` 重算词数** → 更新本文件 → 本地把 CI 的每条腿在干净克隆上原样跑一遍 → commit & push → CI 绿 → `git tag vX.Y.Z && git push --tags` → `gh release create` → 核对 GitHub description → `claude plugin validate --strict .`
