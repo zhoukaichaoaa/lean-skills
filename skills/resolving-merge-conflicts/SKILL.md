@@ -114,23 +114,37 @@ Run every command below and **read what it printed**. Two shapes account for eve
 
    **Only tracked modifications need parking.** An untracked file does not block `--continue` and is never committed by it; leave it alone.
 
-   Park by moving the content out of the way, not with `git stash`:
+   Park the changes as a patch — not the files:
 
    ```bash
-   G="$(git rev-parse --git-dir)"                       # from step 1
-   mkdir -p "$G/lean-parked"
-   cp <each tracked path from step 4> "$G/lean-parked/" # keep the user's version
-   git checkout -- <the same paths>                     # now the tree is clean
+   G="$(git rev-parse --git-dir)"                          # from step 1
+   P="$G/lean-parked-$(date +%s).patch"
+   test ! -e "$P"                                          # never reuse a name
+   git diff --binary -- <each tracked path from step 4> > "$P"
+   test -s "$P"                                            # nothing captured means nothing to park
+   git checkout -- <the same paths>                        # now the tree is clean
    ```
 
-   `git stash` is the wrong tool here, and quietly so: a stash always records the **whole index**, which during a conflict holds the resolution you just staged. Popping it later replays that stale resolution over the rebased file and produces a fresh `UU` conflict that neither side asked for, and the paths come back **staged** rather than in the unstaged state step 4 left them in. Popping *during* the rebase is worse — the next commit may conflict too, and `git stash pop` against an unmerged index fails with `error: could not write index`, which reads like the work is gone when it is still in the stash.
+   **A patch, because a copy cannot carry what a change is.** `cp` moves file *contents*, and the user's work is not always contents: a deleted path has nothing to copy, a rename is two paths, `a/config.txt` and `b/config.txt` collapse onto each other in one flat directory, and a mode change is invisible. `git diff --binary` records all of it — paths, deletions, renames, modes, binary content — and it is the same patch format `git apply` reads back.
 
-   **Restore only once the whole operation is over.** A rebase of several commits stops at each conflicting one, so repeat step 1 through here for each; only when long-form `git status` reports no operation in progress:
+   **A fresh name each time.** A fixed one silently mixes today's work with whatever an interrupted run left behind. Refuse rather than overwrite.
+
+   **`git stash` is the wrong tool here, and quietly so.** A stash always records the **whole index**, which during a conflict holds the resolution you just staged. Popping it later replays that stale resolution over the rebased file and produces a `UU` conflict neither side asked for. Popping *during* the rebase is worse — the next commit may conflict too, and `git stash pop` against an unmerged index fails with `error: could not write index`, which reads like the work is gone when it is still in the stash.
+
+   **Restore only once the whole operation is over.** A rebase of several commits stops at each conflicting one, so repeat step 1 through here for each. Only when long-form `git status` reports no operation in progress:
 
    ```bash
-   cp "$G/lean-parked/"* <back to their paths>          # unstaged, as step 4 left them
-   rm -rf "$G/lean-parked"
+   git apply --3way "$P"          # read the exit code
    ```
+
+   - **Exit 0** — the work went back cleanly. It landed in the index, so put it back the way step 4 left it and then drop the patch:
+
+     ```bash
+     git restore --staged -- <the same paths>
+     rm -f "$P"
+     ```
+
+   - **Non-zero** — the operation changed one of these paths too, and `--3way` has written conflict markers rather than choosing for you. That is the honest answer, and the reason this is not a `cp`: a copy would have silently overwritten the operation's version. **Keep the patch**, name it to the user, and resolve those hunks with them. Delete it only after they confirm their work is back.
 
    Merge, cherry-pick and revert do not need any of this — all three finish with the user's modifications sitting in the working tree, exit 0, and commit nothing of theirs.
 

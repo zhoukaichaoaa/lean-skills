@@ -85,9 +85,17 @@ def drop_crlf(rel):
     io.open(p, 'wb').write(io.open(p, 'rb').read().replace(b'\r\n', b'\n'))
 
 
-GUARD_GOOD = '  case "$CLAUDE_SKILLS_DIR" in\n    *[![:blank:]]*) : ;;\n    *) echo "CLAUDE_SKILLS_DIR is set but blank — unset it for the default, or give it a path" >&2; exit 2 ;;\n  esac\n  case "$CLAUDE_SKILLS_DIR" in\n    /*|[A-Za-z]:[\\\\/]*) : ;;\n    *) echo "CLAUDE_SKILLS_DIR must be an absolute path (got: \'$CLAUDE_SKILLS_DIR\')" >&2; exit 2 ;;\n  esac'
+ROLL_GOOD = '  if [ -n "$swap_target" ] && exists "$_outgoing" && ! exists "$swap_target"; then'
 
-GUARD_BAD = '  case "$CLAUDE_SKILLS_DIR" in\n    "" |" "*) : ;;\n    /*|[A-Za-z]:[\\\\/]*) : ;;\n    *) echo "CLAUDE_SKILLS_DIR must be an absolute path (got: \'$CLAUDE_SKILLS_DIR\')" >&2; exit 2 ;;\n  esac\n  case "$CLAUDE_SKILLS_DIR" in\n    *[![:blank:]]*) : ;;\n    *) echo "CLAUDE_SKILLS_DIR is set but blank — unset it for the default, or give it a path" >&2; exit 2 ;;\n  esac'
+ROLL_BAD = '  if false; then'
+
+ABSCASE_GOOD = '  case "$CLAUDE_SKILLS_DIR" in\n    /*) : ;;'
+
+ABSCASE_BAD = '  case "$CLAUDE_SKILLS_DIR" in\n    " "*) : ;;\n    /*) : ;;'
+
+PARK_GOOD = '   git diff --binary -- <each tracked path from step 4> > "$P"'
+
+PARK_STASH = '   git stash push -u -- <each tracked path from step 4>'
 
 def bump_a_word_count():
     """Add one to whichever number NOTICE currently claims for worktree.
@@ -142,15 +150,14 @@ CASES = [
         'install.sh', '  [ "$first" = "$marker_line" ]',
         '  case "$first" in *"$marker_line"*) return 0 ;; *) return 1 ;; esac')),
     ('installer: cleanup deletes the backup', 'sh', lambda: edit(
-        'install.sh', '  if [ -n "$swap_target" ] && [ -d "$_outgoing" ] && [ ! -e "$swap_target" ]; then',
-        '  if false; then')),
+        'install.sh', ROLL_GOOD, ROLL_BAD)),
     ('installer: swap_target never set', 'sh', lambda: edit(
         'install.sh', '  swap_target=$dest_abs/$name          # the window opens here',
         '  : # window not tracked')),
     # the 0.11.0 shape: one case whose blank arm skips the absolute check,
     # followed by a blank test that a leading-blank path passes
     ('installer: leading blank accepted as absolute', 'sh', lambda: edit(
-        'install.sh', GUARD_GOOD, GUARD_BAD)),
+        'install.sh', ABSCASE_GOOD, ABSCASE_BAD)),
     ('installer: install.ps1 flattened to LF', 'sh', lambda: drop_crlf('install.ps1')),
     ('installer: ps1 refusals go back to exit 1', 'win', lambda: edit(
         'install.ps1', 'function Deny($msg, $code = 2) {', 'function Deny($msg, $code = 1) {')),
@@ -160,6 +167,13 @@ CASES = [
         'install.sh', SPLIT_GOOD, SPLIT_BAD)),
     ('manifest: the marketplace pin goes stale', 'meta', lambda: edit(
         '.claude-plugin/marketplace.json', '"ref": "v', '"ref": "vX')),
+    ('installer: rollback only restores directories', 'sh', lambda: edit(
+        'install.sh', 'exists "$_outgoing" && ! exists "$swap_target"',
+        '[ -d "$_outgoing" ] && ! exists "$swap_target"')),
+    ('skill: parks with cp again', 'rec', lambda: edit(
+        'skills/resolving-merge-conflicts/SKILL.md',
+        '   git diff --binary -- <each tracked path from step 4> > "$P"',
+        '   cp <each tracked path from step 4> "$G/lean-parked/"')),
     ('installer: -e again instead of symlink-aware exists', 'sh', lambda: edit(
         'install.sh', 'exists() { [ -e "$1" ] || [ -L "$1" ]; }',
         'exists() { [ -e "$1" ]; }')),
@@ -193,10 +207,8 @@ CASES = [
         'skills/spec-review/SKILL.md',
         '   git symbolic-ref refs/remotes/origin/HEAD     # offline fallback; see the caveat below',
         '   git merge-base HEAD @{upstream}                # offline fallback; see the caveat below')),
-    ('skill: stash push loses its -u', 'rec', lambda: edit(
-        'skills/resolving-merge-conflicts/SKILL.md',
-        'git stash push -u -- <the paths you unstaged in step 4>',
-        'git stash push -- <the paths you unstaged in step 4>')),
+    ('skill: parks with git stash again', 'rec', lambda: edit(
+        'skills/resolving-merge-conflicts/SKILL.md', PARK_GOOD, PARK_STASH)),
     ('skill: merge-base loses --all', 'rec', lambda: edit(
         'skills/resolving-merge-conflicts/SKILL.md',
         'git merge-base --all HEAD <that head>', 'git merge-base HEAD <that head>')),

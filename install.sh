@@ -163,7 +163,9 @@ cleanup() {
   [ -n "${dest_abs:-}" ] || return 0
   _staging=$dest_abs/.lean-skills-staging-$$
   _outgoing=$dest_abs/.lean-skills-outgoing-$$
-  if [ -n "$swap_target" ] && [ -d "$_outgoing" ] && ! exists "$swap_target"; then
+  # `-d`, not `exists`, meant a plain file or a symlink adopted with --adopt
+  # was moved aside, failed to be replaced, and then deleted by this cleanup.
+  if [ -n "$swap_target" ] && exists "$_outgoing" && ! exists "$swap_target"; then
     if mv "$_outgoing" "$swap_target" 2>/dev/null; then
       echo "  restored  ${swap_target##*/} (install did not finish)" >&2
     else

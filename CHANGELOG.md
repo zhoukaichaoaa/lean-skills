@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.13.2 — 2026-07-28
+
+第六份第三方审计，2 条发现，**都成立，都是丢数据**。两条打的都是 0.13.1 自己刚写的代码。
+
+**`--adopt` 接管非目录时，回滚会把用户的东西删掉**
+
+0.11.0 加的回滚判定是 `[ -d "$_outgoing" ]`。`--adopt` 可以接管的不只是目录 —— 也可能是普通文件或断裂的符号链接（0.13.1 刚把后者纳入保护）。这些被挪到 `outgoing` 之后，`-d` 为假，于是回滚分支不进，紧接着的 `rm -rf` 把它删了。
+
+故障注入（PATH 上垫假 `mv`，让换位失败），目标是用户自己的一个普通文件：
+
+```
+安装前: tdd 是 普通文件，内容=[THE USERS OWN FILE, NOT A DIRECTORY]
+注入失败后 exit=1
+>>> tdd 已消失 —— 用户的文件被销毁
+残留 outgoing: []
+```
+
+改为 `exists "$_outgoing"`（`-e` 或 `-L`）。同一注入后：`tdd 还在: 文件`，内容原样，脚本打印 `restored tdd`。
+
+**`cp` 停靠不住"改动"，它只搬得动"内容"**
+
+0.13.1 把 rebase 的停靠从 `git stash` 换成 `cp` 到 `.git/lean-parked/`。审计指出五个问题，逐条复现：
+
+```
+$ cp a/config.txt b/config.txt doomed.txt later.txt "$P/"
+cp: will not overwrite just-created '.git/lean-parked/config.txt' with 'b/config.txt'
+exit=1
+停靠目录内容: [config.txt later.txt]     <- 两个 config.txt 只剩一份
+```
+
+- **删除的文件**没有内容可复制，`cp` 整条失败
+- **不同目录的同名文件**在扁平目录里互相覆盖
+- **重命名**是两个路径，复制表达不了
+- **文件模式**丢失
+- **固定的目录名**会和上一次未完成运行的残留混用
+- 恢复时直接覆盖，会把 **rebase 后续提交对同一文件的改动**抹掉
+
+改用 `git diff --binary` 生成补丁、`git apply --3way` 恢复。同一夹具（用户改了 `a/config.txt`、`b/config.txt`，删了 `doomed.txt`，改了一个 rebase 后续提交也会改的 `later.txt`）：
+
+```
+a/config.txt=[AA]  b/config.txt=[BB]   <- 无碰撞
+doomed.txt 已删除（正确）
+later.txt=[<<<<<<< ours]               <- 冲突标记，而不是静默覆盖
+status=[... UU later.txt]
+```
+
+`git apply --3way` 在这里的价值正是最后一条：`cp` 会把 rebase 的版本直接盖掉，补丁则把分歧摆出来交给用户。干净恢复时 `git restore --staged` 能精确还原第 4 步留下的未暂存状态（` M` / ` D`），二进制文件往返哈希一致。补丁文件名改为带时间戳且**存在即拒绝**。
+
+**CI**：技能正文的代码块里不得再出现 `git stash` 或 `cp` 作为停靠手段；配方锚点加 `git diff --binary --` 与 `git apply --3way`。`tests/mutations.py` 增至 34 个。
+
+**本机无法验证的**：文件模式变更的往返 —— Windows 上 `core.fileMode` 默认为假，`chmod -x` 不会出现在 diff 里。这条依赖 CI 的两条 POSIX 腿。
+
+**变异用例自身也会陈旧**：本次改动后，3 个旧用例因为锚点指向的代码已被改写而失效（回滚判定、绝对路径守卫、`stash push -u`）。harness 把 SETUP 失败计为未通过（先报 31/34），所以它们不会静默变成哑弹 —— 已重新锚定，并把已过时的 stash 用例换成“不得重新用 stash 停靠”这条新契约。
+
+**验证**：CI 的 9 条 run-step 里 8 条在干净克隆上实跑（含 Windows）；`tests/mutations.py` 34/34。
+
 ## 0.13.1 — 2026-07-28
 
 第五份第三方审计，5 条发现。**4 条成立**，1 条只对了一半；另外我在复现过程中发现问题比审计描述的更深，最后的修法和它建议的不一样。
