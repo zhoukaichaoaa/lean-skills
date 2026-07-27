@@ -131,6 +131,51 @@ jobs:
           test "$rc" -eq 2 || { echo "relative CLAUDE_SKILLS_DIR should exit 2, got $rc"; exit 1; }
           test ! -e rel || { echo "wrote into a relative path"; exit 1; }
 
+          # ...and a leading blank does not make one absolute. POSIX reads the
+          # first component of " /tmp/x" as a space, so the install landed in a
+          # directory named " " under the current one - inside the repository.
+          for v in ' /tmp/lead-space' "$(printf '\t/tmp/lead-tab')" '' '   '; do
+            set +e; CLAUDE_SKILLS_DIR="$v" ./install.sh -y >/dev/null 2>&1; rc=$?; set -e
+            test "$rc" -eq 2 || { echo "blank-prefixed CLAUDE_SKILLS_DIR should exit 2, got $rc"; exit 1; }
+          done
+          test -z "$(find . -maxdepth 1 -name ' ' -o -maxdepth 1 -name "$(printf '\t')")" \
+            || { echo "a blank-named directory was created in the repo"; exit 1; }
+          test -z "$(git status --porcelain)" || { echo "repo dirty after blank-path attempts"; exit 1; }
+          # a real absolute path containing a space must still work
+          Sp="$RUNNER_TEMP/with space/skills"
+          CLAUDE_SKILLS_DIR="$Sp" ./install.sh -y >/dev/null
+          test "$(find "$Sp" -name SKILL.md | wc -l)" -eq 9 || { echo "a path with a space stopped working"; exit 1; }
+
+          # An interrupted or failed swap must leave the installed skill in place.
+          # `outgoing` is the only copy while the window is open, so the cleanup has
+          # to restore it before sweeping - deleting it is how a failed mv turns
+          # into a lost skill. Inject a failure into the mv that installs staging.
+          Fi=$(mktemp -d)          # not $RUNNER_TEMP: a C:/... PATH entry is split on its colon
+          mkdir -p "$Fi/bin"
+          CLAUDE_SKILLS_DIR="$Fi/target" ./install.sh -y >/dev/null
+          REAL_MV=$(command -v mv)
+          cat > "$Fi/bin/mv" <<SHIM
+          #!/bin/sh
+          case "\$1" in
+            *.lean-skills-staging-*)
+              case "\$2" in */tdd) echo "mv: simulated failure" >&2; exit 1 ;; esac ;;
+          esac
+          exec $REAL_MV "\$@"
+          SHIM
+          sed -i.bak 's/^          //' "$Fi/bin/mv" 2>/dev/null || sed -i '' 's/^          //' "$Fi/bin/mv"
+          rm -f "$Fi/bin/mv.bak"
+          chmod +x "$Fi/bin/mv"
+          test "$(PATH="$Fi/bin:$PATH" command -v mv)" = "$Fi/bin/mv" \
+            || { echo "the mv shim is not on PATH - this test would measure nothing"; exit 1; }
+          set +e
+          PATH="$Fi/bin:$PATH" CLAUDE_SKILLS_DIR="$Fi/target" ./install.sh -y >"$Fi/out" 2>&1
+          set -e
+          grep -qF 'simulated failure' "$Fi/out" || { echo "the injected failure never fired"; exit 1; }
+          test -f "$Fi/target/tdd/SKILL.md" || { echo "a failed swap destroyed the installed skill"; exit 1; }
+          test "$(find "$Fi/target" -name SKILL.md | wc -l)" -eq 9 || { echo "a failed swap lost a skill"; exit 1; }
+          test -z "$(find "$Fi/target" -maxdepth 1 -name '.lean-skills-outgoing-*')" \
+            || { echo "the backup was left behind after a successful restore"; exit 1; }
+
           # the clean uninstall path: all ours, nothing spared, exit 0
           K="$RUNNER_TEMP/clean"
           CLAUDE_SKILLS_DIR="$K" ./install.sh -y >/dev/null
@@ -353,6 +398,46 @@ jobs:
           }
           if (-not (Test-Path -LiteralPath (Join-Path $F 'worktree') -PathType Leaf)) { throw "destroyed a non-directory at our name" }
 
+          # A failed swap must not destroy the installed skill. A function shadows
+          # a cmdlet, so a fake Move-Item intercepts the script's calls; dot-source
+          # install.ps1 in a child process because its `exit` would end this one.
+          $Fi = Join-Path $env:RUNNER_TEMP 'faultinj'
+          New-Item -ItemType Directory -Force $Fi | Out-Null
+          Copy-Item -Recurse .\skills (Join-Path $Fi 'skills')
+          Copy-Item .\install.ps1 (Join-Path $Fi 'install.ps1')
+          $FiT = Join-Path $Fi 'target'
+          $env:CLAUDE_SKILLS_DIR = $FiT
+          & powershell -NoProfile -File (Join-Path $Fi 'install.ps1') -Yes | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "fault-injection baseline install failed" }
+          $inj = @'
+          param([string]$Target, [string]$Script)
+          function Move-Item {
+            param([string]$LiteralPath, [string]$Destination)
+            if ($LiteralPath -like '*staging*' -and $Destination -like '*\tdd') { throw "simulated failure" }
+            Microsoft.PowerShell.Management\Move-Item -LiteralPath $LiteralPath -Destination $Destination
+          }
+          $env:CLAUDE_SKILLS_DIR = $Target
+          . $Script -Yes
+          '@ -replace '(?m)^          ', ''
+          $injPath = Join-Path $Fi 'inject.ps1'
+          [IO.File]::WriteAllText($injPath, $inj)
+          # 2>&1 on a native command wraps each stderr line in a NativeCommandError,
+          # which terminates under ErrorActionPreference = 'Stop'. The child is
+          # *expected* to write to stderr here, so relax it around the call.
+          $prevEAP = $ErrorActionPreference
+          $ErrorActionPreference = 'Continue'
+          $out = & powershell -NoProfile -File $injPath $FiT (Join-Path $Fi 'install.ps1') 2>&1 | Out-String
+          $ErrorActionPreference = $prevEAP
+          if ($out -notmatch 'simulated failure') { throw "the injected failure never fired" }
+          if (-not (Test-Path -LiteralPath (Join-Path $FiT 'tdd\SKILL.md'))) {
+            throw "a failed swap destroyed the installed skill"
+          }
+          $kept = @(Get-ChildItem $FiT -Directory | Where-Object { Test-Path (Join-Path $_.FullName 'SKILL.md') }).Count
+          if ($kept -ne 9) { throw "a failed swap lost a skill: $kept of 9 left" }
+          if (@(Get-ChildItem $FiT -Filter '.lean-skills-outgoing-*' -Force).Count -ne 0) {
+            throw "the backup was left behind after a successful restore"
+          }
+
           # a relative target is refused and writes nothing
           $env:CLAUDE_SKILLS_DIR = 'rel-here'
           $threw = $false
@@ -548,7 +633,7 @@ jobs:
           # combined test can fail without failing the step
           test -s "$RUNNER_TEMP/mc-cmds.txt"
           test -s "$RUNNER_TEMP/sr-cmds.txt"
-          for want in 'merge-base --all HEAD <that head>' 'REBASE_HEAD^<n> REBASE_HEAD'                       'CHERRY_PICK_HEAD^<n> CHERRY_PICK_HEAD' 'REVERT_HEAD^<n> REVERT_HEAD'                       'git restore --staged --' 'name-status -M' 'MERGE_HEAD"'                       'hash-object -t tree'; do
+          for want in 'merge-base --all HEAD <that head>' 'REBASE_HEAD^<n> REBASE_HEAD'                       'CHERRY_PICK_HEAD^<n> CHERRY_PICK_HEAD' 'REVERT_HEAD^<n> REVERT_HEAD'                       'git stash push -u --' 'git restore --staged --' 'name-status -M' 'MERGE_HEAD"'                       'hash-object -t tree'; do
             grep -qF "$want" "$RUNNER_TEMP/mc-cmds.txt" || { echo "not prescribed in a code block: $want"; exit 1; }
           done
           for want in 'cat-file -e' 'refs/heads/<default>:refs/remotes/origin/<default>' 'ls-remote --symref'; do
@@ -563,6 +648,14 @@ jobs:
           test "$n_path" -eq 10 || { echo "expected 10 path-printing recipes, found $n_path"; echo "$path_cmds"; exit 1; }
           unquoted=$(grep -vF -- '-c core.quotePath=false' <<<"$path_cmds" || true)
           test -z "$unquoted" || { echo "lost core.quotePath=false:"; echo "$unquoted"; exit 1; }
+          # a bare `git stash push` here would be step 4's own trap in a new
+          # command: the paths it names were just untracked, and a single
+          # untracked path fails the whole command rather than skipping it
+          stash_cmds=$(grep -E '^ *git stash push' "$RUNNER_TEMP/mc-cmds.txt" || true)
+          test -n "$stash_cmds" || { echo "the rebase parking recipe vanished"; exit 1; }
+          bare_stash=$(grep -vF -- ' -u ' <<<"$stash_cmds" || true)
+          test -z "$bare_stash" || { echo "git stash push lost its -u:$bare_stash"; exit 1; }
+
           # prose-level anchors: these are warnings, not commands, so they live
           # outside the fenced blocks the loop above checks
           grep -qF 'Never fall back to `@{upstream}`' "$S"

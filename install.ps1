@@ -117,10 +117,26 @@ if ($aliased) { Deny-Target }
 $marker = '.lean-skills'
 # Claude Code loads every directory under the skills root, so a scratch directory
 # left behind by an interrupted run would be loaded as a skill of its own.
+# While a swap is open the outgoing directory is not scratch - it is the only
+# copy of an installed skill. Restore it before sweeping, or a failed Move-Item
+# turns the cleanup into the thing that destroys it.
+$script:swapTarget = ''
 function Remove-Scratch {
   if (-not $script:destAbs) { return }
-  foreach ($n in @(".lean-skills-staging-$PID", ".lean-skills-outgoing-$PID")) {
-    $s = Join-Path $script:destAbs $n
+  $staging  = Join-Path $script:destAbs ".lean-skills-staging-$PID"
+  $outgoing = Join-Path $script:destAbs ".lean-skills-outgoing-$PID"
+  if ($script:swapTarget -and (Test-Path -LiteralPath $outgoing) -and -not (Test-Path -LiteralPath $script:swapTarget)) {
+    try {
+      Move-Item -LiteralPath $outgoing -Destination $script:swapTarget
+      Write-Host "  restored  $(Split-Path -Leaf $script:swapTarget) (install did not finish)"
+    } catch {
+      # An orphan directory is ugly; a deleted skill is gone.
+      Write-Host "  WARNING: could not restore $(Split-Path -Leaf $script:swapTarget) - your copy is at $outgoing"
+      if (Test-Path -LiteralPath $staging) { Remove-Item -Recurse -Force -LiteralPath $staging -ErrorAction SilentlyContinue }
+      return
+    }
+  }
+  foreach ($s in @($staging, $outgoing)) {
     if (Test-Path -LiteralPath $s) { Remove-Item -Recurse -Force -LiteralPath $s -ErrorAction SilentlyContinue }
   }
 }
@@ -208,8 +224,10 @@ foreach ($dir in $srcDirs) {
   # the two contains a rename rather than an absence.
   $outgoing = Join-Path $destAbs ".lean-skills-outgoing-$PID"
   if (Test-Path -LiteralPath $outgoing) { Remove-Item -Recurse -Force -LiteralPath $outgoing }
+  $script:swapTarget = $target          # the window opens here
   if (Test-Path -LiteralPath $target) { Move-Item -LiteralPath $target -Destination $outgoing }
   Move-Item -LiteralPath $staging -Destination $target
+  $script:swapTarget = ''               # ...and closes only once the new copy is in place
   if (Test-Path -LiteralPath $outgoing) { Remove-Item -Recurse -Force -LiteralPath $outgoing }
   Write-Host "  installed $($dir.Name)"
   $installed++

@@ -103,10 +103,16 @@ Run every command below and **read what it printed**. Two shapes account for eve
    **Rebase only: park the user's work first.** `git rebase --continue` requires a clean working tree, and the paths you rescued in step 4 are now unstaged modifications. It refuses with *"You must edit all merge conflicts and then mark them as resolved using git add"* — a message about conflicts, while `git diff --name-only --diff-filter=U` prints nothing. The only unstaged path in sight is the user's, so the obvious next move is to `git add` it, and the rebase then commits the very work step 4 rescued. Park it instead:
 
    ```bash
-   git stash push -- <the paths you unstaged in step 4>
+   git stash push -u -- <the paths you unstaged in step 4>   # read the exit code
    git rebase --continue
    git stash pop
    ```
+
+   **`-u`, not a bare `push`.** Step 4 took these paths out of the index, so one that was staged as a *new* file is now untracked — and `git stash push` rejects a pathspec it does not know, failing the whole command rather than skipping that one path (`error: pathspec ... did not match any file(s) known to git`, exit 1). That is step 4's trap exactly, in a different command: the parking never happens, `--continue` refuses again, and you are back at the `git add` this step exists to prevent. A rename brings it too — its new path is untracked, and one untracked path kills the command for every path named alongside it.
+
+   **Read the exit code.** If `stash push` fails, stop; do not run `git rebase --continue`.
+
+   After `git stash pop` the paths come back **unstaged**, and a new file comes back **untracked**. That is the state step 4 put them in, not a failed restore — re-staging is the user's call, not yours.
 
    Merge, cherry-pick and revert do not need this — all three finish with the user's modifications sitting in the working tree, exit 0, and commit nothing of theirs.
 

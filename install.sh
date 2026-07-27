@@ -40,15 +40,20 @@ src=$(CDPATH= cd -- "$(dirname -- "$0")/skills" 2>/dev/null && pwd -P) || {
 # A set-but-blank or relative CLAUDE_SKILLS_DIR all cause the same harm: writing
 # somewhere the caller did not mean. Only an absolute path is a real answer.
 if [ "${CLAUDE_SKILLS_DIR+set}" = set ]; then
+  # Blank first, then absolute, and with no exemption for a leading blank. The
+  # other order accepted " /tmp/x": it matched the leading-blank arm, and the
+  # blank test then saw a non-empty string. POSIX reads that path's first
+  # component as a space, so it is relative — and the install landed under the
+  # current directory. (Shell patterns, not `tr`: BSD and GNU `tr` disagree
+  # about whether '\t' means a tab.)
   case "$CLAUDE_SKILLS_DIR" in
-    "" |" "*|"	"*) : ;;
+    *[![:blank:]]*) : ;;
+    *) echo "CLAUDE_SKILLS_DIR is set but blank — unset it for the default, or give it a path" >&2; exit 2 ;;
+  esac
+  case "$CLAUDE_SKILLS_DIR" in
     /*|[A-Za-z]:[\\/]*) : ;;
     *) echo "CLAUDE_SKILLS_DIR must be an absolute path (got: '$CLAUDE_SKILLS_DIR')" >&2; exit 2 ;;
   esac
-  if [ -z "$(printf '%s' "$CLAUDE_SKILLS_DIR" | tr -d ' \t')" ]; then
-    echo "CLAUDE_SKILLS_DIR is set but blank — unset it for the default, or give it a path" >&2
-    exit 2
-  fi
 fi
 dest=${CLAUDE_SKILLS_DIR:-}
 if [ -z "$dest" ]; then
@@ -131,7 +136,27 @@ marker=.lean-skills
 # Anything interrupted mid-swap leaves scratch directories behind. Claude Code
 # loads every directory under the skills root, so an orphaned one would show up
 # as a skill named `.lean-skills-staging-1234`.
-cleanup() { [ -n "${dest_abs:-}" ] && rm -rf "$dest_abs/.lean-skills-staging-$$" "$dest_abs/.lean-skills-outgoing-$$"; }
+#
+# While the swap is open, `outgoing` is not scratch — it is the only copy of an
+# installed skill. Put it back before sweeping, or a failed `mv` turns cleanup
+# into the thing that destroys it.
+swap_target=''
+cleanup() {
+  [ -n "${dest_abs:-}" ] || return 0
+  _staging=$dest_abs/.lean-skills-staging-$$
+  _outgoing=$dest_abs/.lean-skills-outgoing-$$
+  if [ -n "$swap_target" ] && [ -d "$_outgoing" ] && [ ! -e "$swap_target" ]; then
+    if mv "$_outgoing" "$swap_target" 2>/dev/null; then
+      echo "  restored  ${swap_target##*/} (install did not finish)" >&2
+    else
+      # Both moves failed. An orphan directory is ugly; a deleted skill is gone.
+      echo "  WARNING: could not restore ${swap_target##*/} — your copy is at $_outgoing" >&2
+      rm -rf "$_staging"
+      return 0
+    fi
+  fi
+  rm -rf "$_staging" "$_outgoing"
+}
 trap cleanup EXIT INT TERM HUP
 marker_line='installed by lean-skills; uninstall removes only directories carrying this file'
 
@@ -231,8 +256,10 @@ for dir in "$src"/*/; do
   # is cleaned up by the trap.
   outgoing=$dest_abs/.lean-skills-outgoing-$$
   rm -rf "$outgoing"
+  swap_target=$dest_abs/$name          # the window opens here
   [ -e "$dest_abs/$name" ] && mv "$dest_abs/$name" "$outgoing"
   mv "$staging" "$dest_abs/$name"
+  swap_target=''                       # ...and closes only once the new copy is in place
   rm -rf "$outgoing"
   echo "  installed $name"
   installed=$((installed + 1))

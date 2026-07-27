@@ -198,7 +198,7 @@ cd lean-skills
 4. **更新 NOTICE 的逐文件行**，并重算词数。口径是 **`awk '{n+=NF}END{print n}' <file>`** —— 不用 `wc -w`，它的结果随 locale 和 GNU/BSD 实现而变（同一份文件 851 vs 877），写进文档就无法复核。CI 会重算每个箭头的**右侧**（本仓库这一端）并比对；左侧的上游数字要自己按顶部钉住的那两个提交复核。
 5. 更新 CHANGELOG。
 6. **本地把 CI 的每条腿在干净克隆上原样跑一遍。** 这一步已经抓到过四个只在 CI 里才会暴露的 bug。
-7. **对新增的断言做变异测试** —— 故意把被测的东西改坏，确认它真的会红。哑弹断言在这个仓库出现过不止一次（`-notmatch 'THEIRS'` 因大小写不敏感而永不触发）。
+7. **跑 `python tests/mutations.py`** —— 它会逐条把 CI 声称保护的东西故意改坏，确认对应的 step 真的会红；新增断言时同步加一个 case。涉及“失败时会怎样”的断言要用**故障注入**（PATH 上垫一个假 `mv`、或用 PowerShell 函数遮蔽 `Move-Item`），并**先确认它在旧代码上是红的**—— 否则测的是空气（写 shim 时 `PATH` 里不能放 `C:/...` 这种带冒号的路径，Git Bash 会把它拆坏，shim 永远找不到）。旧的措辞：**对新增的断言做变异测试** —— 故意把被测的东西改坏，确认它真的会红。哑弹断言在这个仓库出现过不止一次（`-notmatch 'THEIRS'` 因大小写不敏感而永不触发）。
 8. commit & push → 三平台 CI 绿 → `git tag vX.Y.Z && git push --tags` → `gh release create` → 核对 GitHub 上的描述 → `claude plugin validate --strict .claude-plugin/plugin.json` 与 `--strict .claude-plugin/marketplace.json`（CI 跑的就是这两条）
 
 ## 归属

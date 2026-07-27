@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.12.0 — 2026-07-27
+
+第四份第三方审计，三条全部先复现再改。其中两条打在 **0.11.0 自己引入的代码**上。
+
+**0.11.0 的换位修复引入了一条新的丢数据路径**
+
+0.11.0 把"先删后移"改成"先挪开再换上"，并加了 `trap` 清理。但清理函数把 `outgoing` 当成垃圾 —— 而在换位窗口打开期间，它是那个技能**唯一的一份**。故障注入（PATH 上垫一个在特定 `mv` 上失败的假 `mv`）：
+
+```
+after injected failure: exit=1
+  tdd/SKILL.md: GONE -- the installed skill was destroyed
+  skills left:  8 of 9
+  leftovers:    []          <- 备份被 trap 删了
+```
+
+也就是说 0.11.0 只是把"中断时丢"换成了"`mv` 失败时丢"。改为**先回滚、再打扫**：清理时若窗口未关且目标不存在，先把 `outgoing` 移回去；两次移动都失败则**保留** `outgoing` 并打印它的路径 —— 留个杂目录难看，但丢数据更糟。同一形状在 `install.ps1` 用 `$script:swapTarget` + `try/catch` 实现。
+
+修复后同一注入：`tdd/SKILL.md: present`、`9 of 9`、脚本打印 `restored tdd (install did not finish)`。PowerShell 侧用函数遮蔽 cmdlet 的办法注入，旧代码 `tdd=GONE / 8 of 9`，新代码 `tdd=present / 9 of 9 / restored`。
+
+**0.11.0 新写的 `git stash push` 缺 `-u`**
+
+第 8 步让 rebase 先把用户的文件 `git stash push -- <paths>` 停靠。但第 4 步刚刚把它们移出索引 —— 一个原本作为**新文件**暂存的路径现在是 untracked，而 `git stash push` 会因为不认识这个 pathspec 而**整条失败**：
+
+```
+$ git stash push -- brandnew.txt
+error: pathspec ':(prefix:0)brandnew.txt' did not match any file(s) known to git
+EXIT=1
+```
+
+**这正是第 4 步自己讲透了的陷阱**，换了个命令重犯一次。停靠没发生，`--continue` 照样拒绝，读者又回到那个 `git add`。改为 `-u`，并要求读退出码、失败就停。另外补一句 `pop` 之后的状态说明：文件回来是**未暂存**、新文件回来是**未跟踪**，那是第 4 步留下的状态而不是恢复失败 —— 少了这句，一个只看到"没回到暂存区"的模型很可能判定恢复失败然后 `git add`，又绕回原坑。
+
+**前导空白让相对路径蒙混过关**
+
+守卫的两个检查顺序反了：`case` 的第一条分支放行 `""`、`" "*`、`"\t"*`，随后的空白检查只判"是不是全空白"。于是 `" /tmp/x"` 两关都过。POSIX 下它的第一个路径分量就是一个空格，是**相对路径** —— 实测 `CLAUDE_SKILLS_DIR=" /tmp/leadspace"` **exit 0**，9 个技能被装进仓库根目录下一个名为 `" "` 的目录。改为**先判空白、再判绝对**，并删掉那条前导空白豁免。判空白改用 shell 模式 `*[![:blank:]]*` 而不是 `tr -d ' \t'`（BSD 与 GNU 的 `tr` 对参数里的反斜杠-t 是否表示制表符并不一致）。含空格的**真**绝对路径不受影响。
+
+**变异测试入库**
+
+0.10.0 与 0.11.0 的记录里写着"12 项 / 18 项变异测试全部会红"，但整个仓库里搜不到 `mutation` —— 这个数字**任何人都无法复现，包括三个月后的我自己**。现在是 `tests/mutations.py`：23 个 case，直接从 `.github/workflows/ci.yml` 里抽 step 来跑（因此不会和 CI 漂移），存活即非零退出。
+
+```
+$ python tests/mutations.py
+caught    installer: cleanup deletes the backup
+caught    skill: stash push loses its -u
+...
+23/23 caught
+```
+
+写完第一版后跑下来，23 个里有 **2 个自己就是空转的**：一个往 `case` 里已经匹配的分支**后面**加了一条（`case` 取第一个匹配，加在后面是死代码），另一个把 ```` ```bash ```` 改标成 ```` ```sh ````（抽取器早已改成接受任意围栏，改标签藏不住任何东西）。两个都先单独验过“变异后行为真的变了吗”才确认是用例错而非断言漏，换成真能重现缺陷的写法后 23/23 全红。—— 变异测试本身也会写出哑弹。
+
+发布清单第 7 条相应改写：新增断言要同步加一个 case；涉及"失败时会怎样"的断言必须用**故障注入**，并且**先确认它在旧代码上是红的**。这一条是本轮吃的亏 —— 我第一次的故障注入把 `C:/...` 放进了 `PATH`，Git Bash 按冒号把它拆坏，shim 从未被找到，测试全绿而 bug 还在。
+
+**CI**
+
+三条新断言，双平台各一份：故障注入下技能必须存活且不留备份目录（bash 用 PATH shim，PowerShell 用函数遮蔽 `Move-Item`）；前导空白/纯空白的 `CLAUDE_SKILLS_DIR` 一律 exit 2 且不得在仓库里建出空白名目录，而含空格的真绝对路径仍要装满 9 个；代码块里的 `git stash push` 不带 `-u` 直接红。
+
+**验证**：CI 的 9 条 run-step 里 8 条在干净克隆上逐条实跑通过（含 Windows），第 9 条 `plugin validate` 需要 npm 只在 CI 跑；`tests/mutations.py` 23/23。故障注入在两个平台都确认了旧代码红、新代码绿。
+
 ## 0.11.0 — 2026-07-27
 
 三份独立第三方审计并行（技能逐命令复现 / CI 变异测试 / 声明对账），每条发现先自己复现再改。**68 个变异里 36 个曾经存活**，这一版把它们关掉。
