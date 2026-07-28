@@ -28,7 +28,7 @@
 | `receiving-code-review` | 评审说啥都点头照做 | superpowers，重写 |
 | `diagnosing-bugs` | 硬 bug 不建复现回路就开猜；同一个 bug 连修两刀 | mattpocock，扩写 |
 | `spec-review` | 只查代码规范、不查"当初要的是什么" | mattpocock，收窄为单轴 |
-| `resolving-merge-conflicts` | 冲突了就 `--abort`、随便选一边、或 `git add -A` 把你的 WIP 卷进合并提交 | mattpocock，骨架 + 重写 |
+| `resolving-merge-conflicts` **(experimental)** | 冲突了就 `--abort`、随便选一边、或 `git add -A` 把你的 WIP 卷进合并提交 | mattpocock，骨架 + 重写 |
 
 **手动（description 不进上下文；正文在你调用时才加载）**
 

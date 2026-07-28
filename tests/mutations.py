@@ -139,6 +139,11 @@ ABS_GOOD = "  $isAbsolute = ($d -match '^[A-Za-z]:[\\\\/]') -or ($d -match '^[\\
 ABS_BAD = '  $isAbsolute = [IO.Path]::IsPathRooted($d)'
 
 CASES = [
+    # The parking contracts these used to assert textually are now covered
+    # behaviourally by tests/parking_rollback.sh, which reverts each fix in a
+    # copy of the skill and reruns the real recipe. A text anchor could only
+    # say the command is present; the rollback says the procedure breaks
+    # without it.
     # (label, leg, mutation)
     ('parity: continue-on-error hides a step', 'par', lambda: edit(
         CI, "      - name: install.sh\n        if: runner.os != 'Windows'",
@@ -195,21 +200,9 @@ CASES = [
     ('skill: drops the move to the worktree root', 'rec', lambda: edit(
         'skills/resolving-merge-conflicts/SKILL.md',
         '   cd "$(git rev-parse --show-toplevel)"', '   pwd')),
-    ('skill: a path consumer loses its :(top)', 'rec', lambda: edit(
-        MC, code_line(MC, 'git checkout --'), '   git checkout -- <tracked only>')),
-    ('skill: applies an empty patch anyway', 'rec', lambda: edit(
-        'skills/resolving-merge-conflicts/SKILL.md',
-        '   test -s "$PARK/tracked.patch" || echo "nothing tracked was parked"', '   true')),
     ('skill: untracked side no longer parked', 'rec', lambda: edit(
         'skills/resolving-merge-conflicts/SKILL.md',
         'untracked-files=all', 'untracked-files=normal')),
-    ('skill: unstages the whole list again', 'rec', lambda: edit(
-        'skills/resolving-merge-conflicts/SKILL.md',
-        '   git -c core.quotePath=false diff --cached --name-only  # what it actually staged',
-        '   # (skipped)')),
-    ('skill: checkout takes untracked paths again', 'rec', lambda: edit(
-        MC, code_line(MC, 'git checkout --'),
-        '   git checkout -- <every path from step 4>')),
     ('installer: ps1 loses its symlink-aware test', 'win', lambda: edit(
         'install.ps1', 'function Test-Exists($p) {', 'function Test-Exists-DISABLED($p) {')),
     ('skill: parks with cp again', 'rec', lambda: edit(

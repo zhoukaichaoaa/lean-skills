@@ -1,6 +1,6 @@
 ---
 name: resolving-merge-conflicts
-description: Use when git reports conflicts during a merge, rebase, cherry-pick, revert or pull — before touching any hunk, and before staging anything.
+description: EXPERIMENTAL - the in-flight-work rescue has been corrected in eight consecutive releases and its state space is not exhausted. Use when git reports conflicts during a merge, rebase, cherry-pick, revert or pull — before touching any hunk, and before staging anything.
 ---
 
 # Resolving Merge Conflicts
@@ -125,18 +125,20 @@ Run every command below and **read what it printed**. Two shapes account for eve
    **Nothing in flight? Skip this whole step.** With an empty path list `git diff --binary --` diffs the *entire tree*, so the patch would capture the conflict resolution you just staged — the same mistake `git stash` makes.
 
    ```bash
-   G="$(git rev-parse --git-dir)"                     # from step 1
-   PARK="$G/lean-parked-$(date +%s)"
-   test ! -e "$PARK"                                  # never reuse a name
+   # lean-skills:park
+   cd "$(git rev-parse --show-toplevel)"
+   G="$(git rev-parse --git-dir)"
+   PARK="$G/lean-parked-$(date +%s)-$$"
+   test ! -e "$PARK"
    mkdir -p "$PARK/untracked"
-
-   # split step 4's list - not everything status prints, which also holds the
-   # conflicted file you just staged
-   git -c core.quotePath=false status --porcelain --untracked-files=all -- <step 4's paths>
-   # tracked side -> a patch; untracked side -> moved out, path structure kept
-   git diff --binary -- ':(top)<tracked>' ':(top)<untracked>' > "$PARK/tracked.patch"
-   git checkout -- ':(top)<tracked only>'
-   # for each untracked path: mkdir -p "$PARK/untracked/$(dirname <path>)" && mv <path> "$PARK/untracked/<path>"
+   IFS='
+'
+   git diff --binary -- $(for p in $TRACKED $UNTRACKED; do printf ':(top)%s\n' "$p"; done) > "$PARK/tracked.patch"
+   for p in $TRACKED; do git checkout -- ":(top)$p"; done
+   for p in $UNTRACKED; do
+     mkdir -p "$PARK/untracked/$(dirname "$p")"
+     mv "$p" "$PARK/untracked/$p"
+   done
    ```
 
    **`git checkout --` takes tracked paths only, and so does everything else that reads a pathspec.** This is the rule, not the instance: **any git command given a pathspec it does not recognise rejects the whole command** (`error: pathspec ... did not match any file(s) known to git`, exit 1) rather than skipping that one path. It has now bitten `git restore --staged`, `git stash push`, `git checkout --` and `git restore --staged` again on the way back. `git diff` is the one exception — it ignores paths it does not know, which is why the patch line above can name them all.
@@ -148,10 +150,27 @@ Run every command below and **read what it printed**. Two shapes account for eve
    **Restore only once the whole operation is over.** A rebase of several commits stops at each conflicting one, so repeat step 1 through here for each. Only when long-form `git status` reports no operation in progress:
 
    ```bash
-   test -s "$PARK/tracked.patch" || echo "nothing tracked was parked"
-   git apply --3way "$PARK/tracked.patch"                 # only if it is non-empty
-   git -c core.quotePath=false diff --cached --name-only  # what it actually staged
-   git restore --staged -- ':(top)<only those paths>'     # back to step 4's shape
+   # lean-skills:restore
+   cd "$(git rev-parse --show-toplevel)"
+   IFS='
+'
+   if [ -s "$PARK/tracked.patch" ]; then
+     git apply --3way "$PARK/tracked.patch" || APPLY_CONFLICT=1
+     STAGED=$(git -c core.quotePath=false diff --cached --name-only)
+     for p in $STAGED; do git restore --staged -- ":(top)$p"; done
+   fi
+   CLASH=0
+   ( cd "$PARK/untracked" && find . -type f ) | sed 's|^\./||' > "$PARK/list"
+   for p in $(cat "$PARK/list"); do
+     if [ -e "$p" ] || [ -L "$p" ]; then CLASH=1; continue; fi
+     mkdir -p "$(dirname "$p")"
+     mv "$PARK/untracked/$p" "$p"
+   done
+   if [ "$CLASH" -eq 0 ] && [ -z "${APPLY_CONFLICT:-}" ]; then
+     rm -rf "$PARK"
+   else
+     echo "kept $PARK - tell the user what is still in it"
+   fi
    ```
 
    - **The patch is empty** — the user had only untracked work, which is a perfectly ordinary case. Do not run `git apply` on it: an empty patch exits **128** with `No valid patches in input`, and reading that as the next case reports a conflict that does not exist. Go straight to the untracked files.

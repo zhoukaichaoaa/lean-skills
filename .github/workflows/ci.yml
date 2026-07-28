@@ -783,7 +783,7 @@ jobs:
           # combined test can fail without failing the step
           test -s "$RUNNER_TEMP/mc-cmds.txt"
           test -s "$RUNNER_TEMP/sr-cmds.txt"
-          for want in 'merge-base --all HEAD <that head>' 'REBASE_HEAD^<n> REBASE_HEAD'                       'CHERRY_PICK_HEAD^<n> CHERRY_PICK_HEAD' 'REVERT_HEAD^<n> REVERT_HEAD'                       'rev-list --parents -n 1' 'show-toplevel' 'git diff --binary --' 'git apply --3way' ':(top)<tracked only>' 'diff --cached --name-only' 'untracked-files=all' 'git restore --staged --' 'name-status -M' 'MERGE_HEAD"'                       'hash-object -t tree'; do
+          for want in 'merge-base --all HEAD <that head>' 'REBASE_HEAD^<n> REBASE_HEAD'                       'CHERRY_PICK_HEAD^<n> CHERRY_PICK_HEAD' 'REVERT_HEAD^<n> REVERT_HEAD'                       'rev-list --parents -n 1' 'show-toplevel' 'git diff --binary --' 'git apply --3way' 'git checkout -- ":(top)$p"' 'diff --cached --name-only' '$TRACKED' '$UNTRACKED' 'git restore --staged --' 'name-status -M' 'MERGE_HEAD"'                       'hash-object -t tree'; do
             grep -qF "$want" "$RUNNER_TEMP/mc-cmds.txt" || { echo "not prescribed in a code block: $want"; exit 1; }
           done
           for want in 'cat-file -e' 'refs/heads/<default>:refs/remotes/origin/<default>' 'ls-remote --symref'; do
@@ -795,7 +795,7 @@ jobs:
           # this skill (index diff, porcelain, the step 9 evidence pair) could all
           # be deleted and the step stayed green
           n_path=$(grep -c . <<<"$path_cmds")
-          test "$n_path" -eq 12 || { echo "expected 12 path-printing recipes, found $n_path"; echo "$path_cmds"; exit 1; }
+          test "$n_path" -eq 10 || { echo "expected 10 path-printing recipes, found $n_path"; echo "$path_cmds"; exit 1; }
           unquoted=$(grep -vF -- '-c core.quotePath=false' <<<"$path_cmds" || true)
           test -z "$unquoted" || { echo "lost core.quotePath=false:"; echo "$unquoted"; exit 1; }
           # a bare `git stash push` here would be step 4's own trap in a new
@@ -813,7 +813,7 @@ jobs:
           notop=$(grep -v ":(top)" <<<"$consumers" || true)
           test -z "$notop" || { echo "a path-consuming recipe lost its :(top):"; echo "$notop"; exit 1; }
           # ...and the recipe must refuse to apply an empty patch
-          grep -qF 'test -s "$PARK/tracked.patch"' "$RUNNER_TEMP/mc-cmds.txt" \
+          grep -qF 'if [ -s "$PARK/tracked.patch" ]; then' "$RUNNER_TEMP/mc-cmds.txt" \
             || { echo "the empty-patch guard is gone"; exit 1; }
           # ...and stand at the top before reading any of those paths
           grep -qF 'cd "$(git rev-parse --show-toplevel)"' "$RUNNER_TEMP/mc-cmds.txt" \
@@ -935,6 +935,16 @@ jobs:
           git rev-parse --verify refs/remotes/origin/dev >/dev/null
           git merge-base refs/remotes/origin/dev HEAD >/dev/null
           echo "git recipes: merge range, restore split, per-operation refs and base selection all behave as documented"
+
+      - name: the parking recipe, driven from the skill, over a state matrix
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # These extract the marked blocks from SKILL.md and run them, so the
+          # document is what is under test - not a copy of it in the test.
+          bash tests/parking_matrix.sh
+          bash tests/parking_rollback.sh
 
       - name: worktree and plan-path recipes actually run
         if: runner.os != 'Windows'
