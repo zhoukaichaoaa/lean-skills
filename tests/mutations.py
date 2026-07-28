@@ -139,6 +139,9 @@ ABS_GOOD = "  $isAbsolute = ($d -match '^[A-Za-z]:[\\\\/]') -or ($d -match '^[\\
 ABS_BAD = '  $isAbsolute = [IO.Path]::IsPathRooted($d)'
 
 CASES = [
+    # Two more parking cases were removed in 0.15.0: their anchor strings now
+    # appear twice in the skill, so a single-replacement mutation left one copy
+    # behind and could never fail. parking_rollback.sh covers both behaviourally.
     # The parking contracts these used to assert textually are now covered
     # behaviourally by tests/parking_rollback.sh, which reverts each fix in a
     # copy of the skill and reruns the real recipe. A text anchor could only
@@ -197,12 +200,6 @@ CASES = [
         'skills/resolving-merge-conflicts/SKILL.md',
         'git -c core.quotePath=false diff --cached --name-status -M HEAD',
         'git -c core.quotePath=false diff --cached --name-only HEAD')),
-    ('skill: drops the move to the worktree root', 'rec', lambda: edit(
-        'skills/resolving-merge-conflicts/SKILL.md',
-        '   cd "$(git rev-parse --show-toplevel)"', '   pwd')),
-    ('skill: untracked side no longer parked', 'rec', lambda: edit(
-        'skills/resolving-merge-conflicts/SKILL.md',
-        'untracked-files=all', 'untracked-files=normal')),
     ('installer: ps1 loses its symlink-aware test', 'win', lambda: edit(
         'install.ps1', 'function Test-Exists($p) {', 'function Test-Exists-DISABLED($p) {')),
     ('skill: parks with cp again', 'rec', lambda: edit(
