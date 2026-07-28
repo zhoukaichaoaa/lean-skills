@@ -11,6 +11,14 @@ Run every command below and **read what it printed**. Two shapes account for eve
 - **Collapse to the first.** Several things git will hand you are *not single-valued*, and the convenient accessor quietly returns element one: `git merge-base` prints one base while criss-cross history has several, and the two disagree about which files the operation brings; `MERGE_HEAD` can hold several commits while `git rev-parse MERGE_HEAD` prints one; `<commit>^` is always parent 1 even when the operation named a different mainline; `refs/remotes/origin/HEAD` is whatever the default branch was on the day you cloned. Each returns a valid SHA with exit 0. Check the arity before you trust the value.
 - **The error names the wrong cause.** Once, at step 8, git refuses and its message describes a state you can see is not true. Do not act on the message's suggestion: it points at the user's rescued work, and taking it commits exactly what this skill exists to protect. Step 8 says what to do instead.
 
+0. **Stand at the top of the working tree.** Every path below comes from `git status --porcelain`, which prints them relative to the repository root — while `git restore`, `git diff`, `git checkout` and `mv` all resolve them against the *current* directory. Run one command from a subdirectory and the mismatch is silent in both directions: `git restore --staged` and `git checkout --` exit 1 with `pathspec ... did not match`, leaving the user's work staged, and `git diff` exits **0 with an empty patch** — the first collapse shape, in this skill's own recipe.
+
+   ```bash
+   cd "$(git rev-parse --show-toplevel)"
+   ```
+
+   Inside a bare repository that command fails; there is no working tree and no conflict to resolve. Where a pathspec is passed rather than a filename, `:(top)` says the same thing and is used below as a second line of defence — but `mv` and `mkdir` take no pathspec, so the `cd` is what makes those safe.
+
 1. **Identify the operation and its incoming side.** Which one is in progress decides both how it ends and what counts as "its" changes. Look in `$(git rev-parse --git-dir)` — `--git-dir`, not `--git-common-dir`: inside a linked worktree the conflict state lives in that worktree's own directory.
 
    **Read the table top to bottom and stop at the first row that matches** — the rows are not mutually exclusive. `git rebase -r` (`--rebase-merges`) replays a merge commit, and while that merge is conflicted **both** `MERGE_HEAD` and `rebase-merge/` are present. Taking the merge row there gives a boundary that is the commit the rebase just made, and a finishing command that commits successfully and leaves the rebase exactly where it was — exit 0, a new commit, nothing advanced.
@@ -93,7 +101,7 @@ Run every command below and **read what it printed**. Two shapes account for eve
 4. **Take the user's staged work out of the index before you resolve anything.** This is what makes the promise in step 8 achievable:
 
    ```bash
-   git restore --staged -- <only the staged-not-brought list>   # older git: git reset HEAD -- <paths>
+   git restore --staged -- ':(top)<each staged-not-brought path>'   # older git: git reset HEAD -- <paths>
    ```
 
    **Only that first list.** An untracked path is not in the index, and passing one makes git reject the *whole* command — the staged files you meant to rescue stay staged and get committed anyway. (A working-tree-only path is harmless to pass, but it has nothing to unstage, so listing it only obscures what you did.)
@@ -122,11 +130,12 @@ Run every command below and **read what it printed**. Two shapes account for eve
    test ! -e "$PARK"                                  # never reuse a name
    mkdir -p "$PARK/untracked"
 
-   # step 4's paths, split by what git knows about them
-   git -c core.quotePath=false status --porcelain --untracked-files=all
+   # split step 4's list - not everything status prints, which also holds the
+   # conflicted file you just staged
+   git -c core.quotePath=false status --porcelain --untracked-files=all -- <step 4's paths>
    # tracked side -> a patch; untracked side -> moved out, path structure kept
-   git diff --binary -- <tracked paths> <untracked paths> > "$PARK/tracked.patch"
-   git checkout -- <tracked paths only>
+   git diff --binary -- ':(top)<tracked>' ':(top)<untracked>' > "$PARK/tracked.patch"
+   git checkout -- ':(top)<tracked only>'
    # for each untracked path: mkdir -p "$PARK/untracked/$(dirname <path>)" && mv <path> "$PARK/untracked/<path>"
    ```
 
@@ -139,13 +148,15 @@ Run every command below and **read what it printed**. Two shapes account for eve
    **Restore only once the whole operation is over.** A rebase of several commits stops at each conflicting one, so repeat step 1 through here for each. Only when long-form `git status` reports no operation in progress:
 
    ```bash
-   git apply --3way "$PARK/tracked.patch"                 # read the exit code
+   test -s "$PARK/tracked.patch" || echo "nothing tracked was parked"
+   git apply --3way "$PARK/tracked.patch"                 # only if it is non-empty
    git -c core.quotePath=false diff --cached --name-only  # what it actually staged
-   git restore --staged -- <only those paths>             # back to step 4's shape
+   git restore --staged -- ':(top)<only those paths>'     # back to step 4's shape
    ```
 
+   - **The patch is empty** — the user had only untracked work, which is a perfectly ordinary case. Do not run `git apply` on it: an empty patch exits **128** with `No valid patches in input`, and reading that as the next case reports a conflict that does not exist. Go straight to the untracked files.
    - **`git apply` exit 0** — the tracked work went back. Unstage exactly what the previous command printed, and nothing else: naming the untracked paths here is the same trap again, and it would leave a staged deletion the next commit sweeps up.
-   - **Non-zero** — the operation changed one of these paths too, and `--3way` has written conflict markers rather than choosing for you. That is the honest answer, and the reason this is not a `cp`: a copy would have silently overwritten the operation's version. **Keep the patch**, name it to the user, and resolve those hunks with them.
+   - **Non-zero on a non-empty patch** — the operation changed one of these paths too, and `--3way` has written conflict markers rather than choosing for you. That is the honest answer, and the reason this is not a `cp`: a copy would have silently overwritten the operation's version. **Keep the patch**, name it to the user, and resolve those hunks with them.
 
    Then move the untracked files back, **one refusal per occupied path**:
 
@@ -171,7 +182,7 @@ Run every command below and **read what it printed**. Two shapes account for eve
 
    Each must still appear, **and in the column step 3 recorded it in**. Existence alone is not enough: a path that came back *staged* when the user had it unstaged is one `git commit` away from being swept up, and it reads as present here. Compare the first two characters, not just the name.
 
-   A path that has gone quiet was committed by the operation. The `:(top)` prefix matters too: pathspecs resolve against the current directory while step 3 printed them relative to the repository root, so running this from a subdirectory silently matches nothing and reads the same wrong way. If step 3's list was empty, say so — there was no in-flight work to protect, and an empty check proves nothing.
+   A path that has gone quiet was committed by the operation. The `:(top)` prefix matters here for the same reason step 0 does: pathspecs resolve against the current directory while status printed them relative to the repository root, so running this from a subdirectory silently matches nothing and reads the same wrong way. If step 3's list was empty, say so — there was no in-flight work to protect, and an empty check proves nothing.
 
    Then cross-check against what the operation actually recorded, using the boundary from step 1:
 

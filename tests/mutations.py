@@ -85,6 +85,24 @@ def drop_crlf(rel):
     io.open(p, 'wb').write(io.open(p, 'rb').read().replace(b'\r\n', b'\n'))
 
 
+MC = 'skills/resolving-merge-conflicts/SKILL.md'
+
+
+def code_line(rel, starts):
+    """The single indented recipe line in `rel` that begins with `starts`.
+
+    Deriving the anchor beats hardcoding it: three releases running, a reworded
+    recipe turned a case into a setup failure, and one case silently anchored to
+    a prose sentence that merely mentioned the command. What a case is about is
+    "this command is still prescribed", not the exact words around it.
+    """
+    lines = io.open(os.path.join(REPO, rel), encoding='utf-8').read().split('\n')
+    hits = [l for l in lines if l.startswith('   ' + starts)]
+    if len(hits) != 1:
+        raise AssertionError('%s: %d lines start with %r, want exactly 1' % (rel, len(hits), starts))
+    return hits[0]
+
+
 ROLL_GOOD = '  if [ -n "$swap_target" ] && exists "$_outgoing" && ! exists "$swap_target"; then'
 
 ROLL_BAD = '  if false; then'
@@ -93,7 +111,7 @@ ABSCASE_GOOD = '  case "$CLAUDE_SKILLS_DIR" in\n    /*) : ;;'
 
 ABSCASE_BAD = '  case "$CLAUDE_SKILLS_DIR" in\n    " "*) : ;;\n    /*) : ;;'
 
-PARK_GOOD = '   git diff --binary -- <tracked paths> <untracked paths> > "$PARK/tracked.patch"'
+PARK_GOOD = code_line(MC, 'git diff --binary')
 
 PARK_STASH = '   git stash push -u -- <each tracked path from step 4>'
 
@@ -174,6 +192,14 @@ CASES = [
         'skills/resolving-merge-conflicts/SKILL.md',
         'git -c core.quotePath=false diff --cached --name-status -M HEAD',
         'git -c core.quotePath=false diff --cached --name-only HEAD')),
+    ('skill: drops the move to the worktree root', 'rec', lambda: edit(
+        'skills/resolving-merge-conflicts/SKILL.md',
+        '   cd "$(git rev-parse --show-toplevel)"', '   pwd')),
+    ('skill: a path consumer loses its :(top)', 'rec', lambda: edit(
+        MC, code_line(MC, 'git checkout --'), '   git checkout -- <tracked only>')),
+    ('skill: applies an empty patch anyway', 'rec', lambda: edit(
+        'skills/resolving-merge-conflicts/SKILL.md',
+        '   test -s "$PARK/tracked.patch" || echo "nothing tracked was parked"', '   true')),
     ('skill: untracked side no longer parked', 'rec', lambda: edit(
         'skills/resolving-merge-conflicts/SKILL.md',
         'untracked-files=all', 'untracked-files=normal')),
@@ -182,8 +208,7 @@ CASES = [
         '   git -c core.quotePath=false diff --cached --name-only  # what it actually staged',
         '   # (skipped)')),
     ('skill: checkout takes untracked paths again', 'rec', lambda: edit(
-        'skills/resolving-merge-conflicts/SKILL.md',
-        '   git checkout -- <tracked paths only>',
+        MC, code_line(MC, 'git checkout --'),
         '   git checkout -- <every path from step 4>')),
     ('installer: ps1 loses its symlink-aware test', 'win', lambda: edit(
         'install.ps1', 'function Test-Exists($p) {', 'function Test-Exists-DISABLED($p) {')),

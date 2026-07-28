@@ -783,7 +783,7 @@ jobs:
           # combined test can fail without failing the step
           test -s "$RUNNER_TEMP/mc-cmds.txt"
           test -s "$RUNNER_TEMP/sr-cmds.txt"
-          for want in 'merge-base --all HEAD <that head>' 'REBASE_HEAD^<n> REBASE_HEAD'                       'CHERRY_PICK_HEAD^<n> CHERRY_PICK_HEAD' 'REVERT_HEAD^<n> REVERT_HEAD'                       'rev-list --parents -n 1' 'git diff --binary --' 'git apply --3way' 'tracked paths only' 'diff --cached --name-only' 'untracked-files=all' 'git restore --staged --' 'name-status -M' 'MERGE_HEAD"'                       'hash-object -t tree'; do
+          for want in 'merge-base --all HEAD <that head>' 'REBASE_HEAD^<n> REBASE_HEAD'                       'CHERRY_PICK_HEAD^<n> CHERRY_PICK_HEAD' 'REVERT_HEAD^<n> REVERT_HEAD'                       'rev-list --parents -n 1' 'show-toplevel' 'git diff --binary --' 'git apply --3way' ':(top)<tracked only>' 'diff --cached --name-only' 'untracked-files=all' 'git restore --staged --' 'name-status -M' 'MERGE_HEAD"'                       'hash-object -t tree'; do
             grep -qF "$want" "$RUNNER_TEMP/mc-cmds.txt" || { echo "not prescribed in a code block: $want"; exit 1; }
           done
           for want in 'cat-file -e' 'refs/heads/<default>:refs/remotes/origin/<default>' 'ls-remote --symref'; do
@@ -804,6 +804,21 @@ jobs:
           # `git stash` cannot park work during a rebase: a stash records the whole
           # index, so it carries the conflict resolution, replays it after the rebase
           # and manufactures a fresh conflict - and popping mid-rebase fails outright.
+          # Every prescribed command that consumes a path printed by status must say
+          # :(top). status prints repo-root-relative paths; these resolve against the
+          # current directory, so from a subdirectory `git diff` returns 0 with an
+          # empty patch while restore/checkout exit 1 and leave the work staged.
+          consumers=$(grep -E "^ *git (restore --staged|checkout|diff --binary) " "$RUNNER_TEMP/mc-cmds.txt" || true)
+          test -n "$consumers" || { echo "the path-consuming recipes vanished"; exit 1; }
+          notop=$(grep -v ":(top)" <<<"$consumers" || true)
+          test -z "$notop" || { echo "a path-consuming recipe lost its :(top):"; echo "$notop"; exit 1; }
+          # ...and the recipe must refuse to apply an empty patch
+          grep -qF 'test -s "$PARK/tracked.patch"' "$RUNNER_TEMP/mc-cmds.txt" \
+            || { echo "the empty-patch guard is gone"; exit 1; }
+          # ...and stand at the top before reading any of those paths
+          grep -qF 'cd "$(git rev-parse --show-toplevel)"' "$RUNNER_TEMP/mc-cmds.txt" \
+            || { echo "the skill no longer moves to the worktree root"; exit 1; }
+
           stash_cmds=$(grep -E '^ *git stash' "$RUNNER_TEMP/mc-cmds.txt" || true)
           test -z "$stash_cmds" || { echo "the skill prescribes git stash again:$stash_cmds"; exit 1; }
           # ...and neither can `cp`: a copy cannot carry a deletion, a rename, a mode
