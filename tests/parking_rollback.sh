@@ -9,6 +9,10 @@ cd "$(dirname "$0")/.." || exit 1
 SKILL=skills/resolving-merge-conflicts/SKILL.md
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 
+# The untracked-parking loop, taken from the document itself.
+UNTRACKED_LOOP=$(awk '/^   for p in \$UNTRACKED; do$/,/^   done$/' "$SKILL")
+[ -n "$UNTRACKED_LOOP" ] || { echo "cannot find the untracked loop in $SKILL"; exit 2; }
+
 # label | python replacement applied to the copy | states expected to break
 run_rollback() {
   label=$1; frm=$2; to=$3
@@ -46,10 +50,7 @@ run_rollback "no empty-patch guard" \
   '   if true; then' || bad=1
 
 run_rollback "untracked side not parked" \
-  '   for p in $UNTRACKED; do
-     mkdir -p "$PARK/untracked/$(dirname "$p")"
-     mv "$p" "$PARK/untracked/$p"
-   done' \
+  "$UNTRACKED_LOOP" \
   '   :' || bad=1
 
 # The recipe loops per path, so an unknown path costs one iteration rather
@@ -57,6 +58,17 @@ run_rollback "untracked side not parked" \
 run_rollback "unstage every path in one command" \
   '     for p in $STAGED; do git restore --staged -- ":(top)$p"; done' \
   '     git restore --staged -- $(for p in $TRACKED $UNTRACKED; do printf ":(top)%s\\n" "$p"; done)' || bad=1
+
+# A re-scan cannot see a symlink: find -type f skips it, so it is parked,
+# never restored, and deleted with the parking area - while the block exits 0.
+run_rollback "restore re-scans instead of reading the manifest" \
+  '   while IFS= read -r -d '"''"' p; do' \
+  '   for p in $(cd "$PARK/untracked" && find . -type f | sed "s|^./||"); do' || bad=1
+
+# Not a case: the leftover guard cannot fail while the manifest is correct,
+# so removing it alone changes nothing. It is the second line of defence for
+# a manifest that missed something, and the manifest case above is what
+# actually demonstrates the loss.
 
 run_rollback "no collision guard on the way back" \
   '     if [ -e "$p" ] || [ -L "$p" ]; then CLASH=1; continue; fi' \

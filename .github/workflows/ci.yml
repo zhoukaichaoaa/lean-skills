@@ -936,7 +936,7 @@ jobs:
           git merge-base refs/remotes/origin/dev HEAD >/dev/null
           echo "git recipes: merge range, restore split, per-operation refs and base selection all behave as documented"
 
-      - name: the parking recipe, driven from the skill, over a state matrix
+      - name: parking and installer state matrices, driven from the real sources
         if: runner.os != 'Windows'
         shell: bash
         run: |
@@ -945,6 +945,16 @@ jobs:
           # document is what is under test - not a copy of it in the test.
           bash tests/parking_matrix.sh
           bash tests/parking_rollback.sh
+          # the installer replaces and deletes directories the user owns, so it
+          # gets the same treatment: real script, full tree comparison, fault
+          # injection at the swap, and the versions that used to fail must fail
+          bash tests/install_matrix.sh
+          for old in v0.12.0 v0.13.1; do
+            git show "$old:install.sh" > "$RUNNER_TEMP/old-$old.sh" 2>/dev/null || continue
+            if bash tests/install_matrix.sh "$RUNNER_TEMP/old-$old.sh" >/dev/null 2>&1; then
+              echo "$old passes the installer matrix; it should not"; exit 1
+            fi
+          done
 
       - name: worktree and plan-path recipes actually run
         if: runner.os != 'Windows'

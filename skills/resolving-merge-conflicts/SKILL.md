@@ -135,9 +135,11 @@ Run every command below and **read what it printed**. Two shapes account for eve
 '
    git diff --binary -- $(for p in $TRACKED $UNTRACKED; do printf ':(top)%s\n' "$p"; done) > "$PARK/tracked.patch"
    for p in $TRACKED; do git checkout -- ":(top)$p"; done
+   : > "$PARK/manifest"
    for p in $UNTRACKED; do
      mkdir -p "$PARK/untracked/$(dirname "$p")"
      mv "$p" "$PARK/untracked/$p"
+     printf '%s\0' "$p" >> "$PARK/manifest"     # the record of what was moved
    done
    ```
 
@@ -160,13 +162,13 @@ Run every command below and **read what it printed**. Two shapes account for eve
      for p in $STAGED; do git restore --staged -- ":(top)$p"; done
    fi
    CLASH=0
-   ( cd "$PARK/untracked" && find . -type f ) | sed 's|^\./||' > "$PARK/list"
-   for p in $(cat "$PARK/list"); do
+   while IFS= read -r -d '' p; do
      if [ -e "$p" ] || [ -L "$p" ]; then CLASH=1; continue; fi
      mkdir -p "$(dirname "$p")"
      mv "$PARK/untracked/$p" "$p"
-   done
-   if [ "$CLASH" -eq 0 ] && [ -z "${APPLY_CONFLICT:-}" ]; then
+   done < "$PARK/manifest"
+   LEFT=$(find "$PARK/untracked" -mindepth 1 ! -type d -print -quit)
+   if [ "$CLASH" -eq 0 ] && [ -z "${APPLY_CONFLICT:-}" ] && [ -z "$LEFT" ]; then
      rm -rf "$PARK"
    else
      echo "kept $PARK - tell the user what is still in it"
@@ -177,7 +179,9 @@ Run every command below and **read what it printed**. Two shapes account for eve
    - **`git apply` exit 0** — the tracked work went back. Unstage exactly what the previous command printed, and nothing else: naming the untracked paths here is the same trap again, and it would leave a staged deletion the next commit sweeps up.
    - **Non-zero on a non-empty patch** — the operation changed one of these paths too, and `--3way` has written conflict markers rather than choosing for you. That is the honest answer, and the reason this is not a `cp`: a copy would have silently overwritten the operation's version. **Keep the patch**, name it to the user, and resolve those hunks with them.
 
-   Then move the untracked files back, **one refusal per occupied path**:
+   Then move them back **from the record written while parking**, one refusal per occupied path.
+
+   **A manifest, not a re-scan.** Deriving the list again with `find -type f` misses anything that is not a regular file: a symlink is `-type l`, so it is parked, never found on the way back, and then deleted with the parking area — while the block still exits 0. The manifest is NUL-separated because a newline is a legal character in a path. And the parking area is removed only when it is *empty of non-directories*, so even a manifest that missed something cannot turn into a deletion.
 
    ```bash
    # for each file under "$PARK/untracked": if the path now exists, do NOT overwrite it

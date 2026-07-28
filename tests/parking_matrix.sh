@@ -14,6 +14,12 @@
 # condition is exact: after the whole rebase, the working tree, the index and
 # the untracked files must be byte-for-byte what they were before parking.
 set -u
+# Git Bash makes a copy unless told otherwise; without this the symlink cases
+# would silently test ordinary files.
+export MSYS=${MSYS:-winsymlinks:nativestrict}
+probe=$(mktemp -d); SYMLINKS=0
+if ln -s target "$probe/l" 2>/dev/null && [ -L "$probe/l" ]; then SYMLINKS=1; fi
+rm -rf "$probe"
 
 SKILL=${1:-skills/resolving-merge-conflicts/SKILL.md}
 [ -f "$SKILL" ] || { echo "no skill at $SKILL"; exit 2; }
@@ -75,6 +81,11 @@ apply_state() {
                  git restore --staged -- ren-old.txt ren-new.txt 2>/dev/null ;;
     untrackedonly)
                  printf 'wip\n' > brandnew.txt; mkdir -p deep/er; printf 'wip2\n' > deep/er/mine.txt ;;
+    symlink)     ln -s tracked.txt userlink ;;
+    brokenlink)  ln -s nowhere-at-all userbroken ;;
+    linkmixed)   ln -s tracked.txt userlink; ln -s nowhere userbroken
+                 printf 'edited\n' > tracked.txt
+                 printf 'wip\n' > brandnew.txt ;;
     mixed)       printf 'edited\n' > tracked.txt
                  git rm -q doomed.txt; git restore --staged -- doomed.txt
                  printf 'wip\n' > brandnew.txt ;;
@@ -82,10 +93,15 @@ apply_state() {
   esac
 }
 
-snapshot() {   # porcelain plus the bytes of every non-git file
+snapshot() {   # porcelain, plus type + content/target + mode of every non-git entry
   git -c core.quotePath=false status --porcelain --untracked-files=all | LC_ALL=C sort
-  find . -path ./.git -prune -o -type f -print | LC_ALL=C sort | while IFS= read -r f; do
-    printf '%s %s\n' "$f" "$(git hash-object "$f")"
+  find . -path ./.git -prune -o ! -type d -print | LC_ALL=C sort | while IFS= read -r f; do
+    if [ -L "$f" ]; then
+      printf '%s link %s\n' "$f" "$(readlink "$f")"
+    else
+      printf '%s file %s %s\n' "$f" "$(git hash-object "$f")" \
+        "$(ls -l "$f" | cut -c1-10)"
+    fi
   done
 }
 
@@ -163,6 +179,14 @@ for s in tracked staged deleted renamed untrackedonly mixed none clash; do
   run_case "$s" root
   run_case "$s" sub
 done
+if [ "$SYMLINKS" -eq 1 ]; then
+  for s in symlink brokenlink linkmixed; do
+    run_case "$s" root
+    run_case "$s" sub
+  done
+else
+  echo "  skip  symlink / brokenlink / linkmixed (this platform makes copies, not links)"
+fi
 
 # Abandoning after parking must leave the work recoverable, not gone: the patch
 # and the moved files are the only copy at that point.
