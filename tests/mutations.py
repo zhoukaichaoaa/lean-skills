@@ -93,7 +93,7 @@ ABSCASE_GOOD = '  case "$CLAUDE_SKILLS_DIR" in\n    /*) : ;;'
 
 ABSCASE_BAD = '  case "$CLAUDE_SKILLS_DIR" in\n    " "*) : ;;\n    /*) : ;;'
 
-PARK_GOOD = '   git diff --binary -- <every path from step 4> > "$P"'
+PARK_GOOD = '   git diff --binary -- <tracked paths> <untracked paths> > "$PARK/tracked.patch"'
 
 PARK_STASH = '   git stash push -u -- <each tracked path from step 4>'
 
@@ -170,10 +170,21 @@ CASES = [
     ('installer: rollback only restores directories', 'sh', lambda: edit(
         'install.sh', 'exists "$_outgoing" && ! exists "$swap_target"',
         '[ -d "$_outgoing" ] && ! exists "$swap_target"')),
+    ('skill: step 3 back to --name-only, losing renames', 'rec', lambda: edit(
+        'skills/resolving-merge-conflicts/SKILL.md',
+        'git -c core.quotePath=false diff --cached --name-status -M HEAD',
+        'git -c core.quotePath=false diff --cached --name-only HEAD')),
+    ('skill: untracked side no longer parked', 'rec', lambda: edit(
+        'skills/resolving-merge-conflicts/SKILL.md',
+        'untracked-files=all', 'untracked-files=normal')),
+    ('skill: unstages the whole list again', 'rec', lambda: edit(
+        'skills/resolving-merge-conflicts/SKILL.md',
+        '   git -c core.quotePath=false diff --cached --name-only  # what it actually staged',
+        '   # (skipped)')),
     ('skill: checkout takes untracked paths again', 'rec', lambda: edit(
         'skills/resolving-merge-conflicts/SKILL.md',
-        '   git checkout -- <only the paths git already tracks>',
-        '   git checkout -- <the same paths>')),
+        '   git checkout -- <tracked paths only>',
+        '   git checkout -- <every path from step 4>')),
     ('installer: ps1 loses its symlink-aware test', 'win', lambda: edit(
         'install.ps1', 'function Test-Exists($p) {', 'function Test-Exists-DISABLED($p) {')),
     ('skill: parks with cp again', 'rec', lambda: edit(

@@ -783,7 +783,7 @@ jobs:
           # combined test can fail without failing the step
           test -s "$RUNNER_TEMP/mc-cmds.txt"
           test -s "$RUNNER_TEMP/sr-cmds.txt"
-          for want in 'merge-base --all HEAD <that head>' 'REBASE_HEAD^<n> REBASE_HEAD'                       'CHERRY_PICK_HEAD^<n> CHERRY_PICK_HEAD' 'REVERT_HEAD^<n> REVERT_HEAD'                       'rev-list --parents -n 1' 'git diff --binary --' 'git apply --3way' 'only the paths git already tracks' 'git restore --staged --' 'name-status -M' 'MERGE_HEAD"'                       'hash-object -t tree'; do
+          for want in 'merge-base --all HEAD <that head>' 'REBASE_HEAD^<n> REBASE_HEAD'                       'CHERRY_PICK_HEAD^<n> CHERRY_PICK_HEAD' 'REVERT_HEAD^<n> REVERT_HEAD'                       'rev-list --parents -n 1' 'git diff --binary --' 'git apply --3way' 'tracked paths only' 'diff --cached --name-only' 'untracked-files=all' 'git restore --staged --' 'name-status -M' 'MERGE_HEAD"'                       'hash-object -t tree'; do
             grep -qF "$want" "$RUNNER_TEMP/mc-cmds.txt" || { echo "not prescribed in a code block: $want"; exit 1; }
           done
           for want in 'cat-file -e' 'refs/heads/<default>:refs/remotes/origin/<default>' 'ls-remote --symref'; do
@@ -795,7 +795,7 @@ jobs:
           # this skill (index diff, porcelain, the step 9 evidence pair) could all
           # be deleted and the step stayed green
           n_path=$(grep -c . <<<"$path_cmds")
-          test "$n_path" -eq 11 || { echo "expected 11 path-printing recipes, found $n_path"; echo "$path_cmds"; exit 1; }
+          test "$n_path" -eq 12 || { echo "expected 12 path-printing recipes, found $n_path"; echo "$path_cmds"; exit 1; }
           unquoted=$(grep -vF -- '-c core.quotePath=false' <<<"$path_cmds" || true)
           test -z "$unquoted" || { echo "lost core.quotePath=false:"; echo "$unquoted"; exit 1; }
           # a bare `git stash push` here would be step 4's own trap in a new
@@ -816,7 +816,7 @@ jobs:
           grep -qF 'Never fall back to `@{upstream}`' "$S"
           grep -qF 'baseRefOid' "$S"
           # and what they must never say again - each of these shipped as a bug once
-          for bad in 'diff --name-only HEAD MERGE_HEAD' 'diff --name-status -M HEAD MERGE_HEAD' 'diff --cached --name-only'; do
+          for bad in 'diff --name-only HEAD MERGE_HEAD' 'diff --name-status -M HEAD MERGE_HEAD' 'diff --cached --name-only HEAD'; do
             if grep -qF "$bad" "$M"; then echo "retired mistake is back in $M: $bad"; exit 1; fi
           done
           # These must not reappear as *instructions*. The guard sentence above

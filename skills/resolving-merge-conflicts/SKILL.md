@@ -112,48 +112,50 @@ Run every command below and **read what it printed**. Two shapes account for eve
 
    **Rebase only: park the user's tracked modifications first.** `git rebase --continue` needs a working tree with nothing modified except the conflict you just resolved. The paths you rescued in step 4 are now unstaged modifications, and it refuses with *"You must edit all merge conflicts and then mark them as resolved using git add"* — a message about conflicts, while `git diff --name-only --diff-filter=U` prints nothing. The only unstaged path in sight is the user's, so the obvious next move is to `git add` it, and the rebase then commits the very work step 4 rescued.
 
-   **Only tracked modifications need parking.** An untracked file does not block `--continue` and is never committed by it; leave it alone.
+   **Park everything they have in flight, not just the tracked side.** An untracked file does not block the commit you are continuing — but a *later* commit in the same rebase may create that path, and then git stops with `error: The following untracked working tree files would be overwritten by merge` and the rebase cannot finish. A rename in flight is the common way to land there: its new path is untracked, and the operation may well be creating it too.
 
-   Park the changes as a patch — not the files:
+   **Nothing in flight? Skip this whole step.** With an empty path list `git diff --binary --` diffs the *entire tree*, so the patch would capture the conflict resolution you just staged — the same mistake `git stash` makes.
 
    ```bash
-   G="$(git rev-parse --git-dir)"                          # from step 1
-   P="$G/lean-parked-$(date +%s).patch"
-   test ! -e "$P"                                          # never reuse a name
-   git diff --binary -- <every path from step 4> > "$P"
-   test -s "$P"                                            # nothing captured means nothing to park
-   git -c core.quotePath=false status --porcelain -- <the same paths>   # read the first column
-   git checkout -- <only the paths git already tracks>     # now the tree is clean
+   G="$(git rev-parse --git-dir)"                     # from step 1
+   PARK="$G/lean-parked-$(date +%s)"
+   test ! -e "$PARK"                                  # never reuse a name
+   mkdir -p "$PARK/untracked"
+
+   # step 4's paths, split by what git knows about them
+   git -c core.quotePath=false status --porcelain --untracked-files=all
+   # tracked side -> a patch; untracked side -> moved out, path structure kept
+   git diff --binary -- <tracked paths> <untracked paths> > "$PARK/tracked.patch"
+   git checkout -- <tracked paths only>
+   # for each untracked path: mkdir -p "$PARK/untracked/$(dirname <path>)" && mv <path> "$PARK/untracked/<path>"
    ```
 
-   **`git checkout --` takes tracked paths only.** This is step 4's trap for the third time in a third command: a pathspec git does not recognise makes it reject the *whole* command (`error: pathspec ... did not match any file(s) known to git`, exit 1), so nothing gets cleaned and `--continue` refuses. A rename in flight is exactly this shape — after step 4 its new path is untracked (`??`) while the old path's deletion is tracked (` D`). Clean the tracked ones; the untracked ones neither block `--continue` nor get committed by it, so leave them where they are. `git diff` is the tolerant one here — it ignores a path it does not know, so the patch command can name them all.
+   **`git checkout --` takes tracked paths only, and so does everything else that reads a pathspec.** This is the rule, not the instance: **any git command given a pathspec it does not recognise rejects the whole command** (`error: pathspec ... did not match any file(s) known to git`, exit 1) rather than skipping that one path. It has now bitten `git restore --staged`, `git stash push`, `git checkout --` and `git restore --staged` again on the way back. `git diff` is the one exception — it ignores paths it does not know, which is why the patch line above can name them all.
 
-   **A patch, because a copy cannot carry what a change is.** `cp` moves file *contents*, and the user's work is not always contents: a deleted path has nothing to copy, a rename is two paths, `a/config.txt` and `b/config.txt` collapse onto each other in one flat directory, and a mode change is invisible. `git diff --binary` records all of it — paths, deletions, renames, modes, binary content — and it is the same patch format `git apply` reads back.
-
-   **A fresh name each time.** A fixed one silently mixes today's work with whatever an interrupted run left behind. Refuse rather than overwrite.
+   **A patch, because a copy cannot carry what a change is.** `cp` moves file *contents*, and the user's work is not always contents: a deleted path has nothing to copy, a rename is two paths, `a/config.txt` and `b/config.txt` collapse onto each other in one flat directory, and a mode change is invisible. `git diff --binary` records all of it. The untracked side has none of those problems — a new file is only content — so moving it is enough, as long as the directory structure comes along.
 
    **`git stash` is the wrong tool here, and quietly so.** A stash always records the **whole index**, which during a conflict holds the resolution you just staged. Popping it later replays that stale resolution over the rebased file and produces a `UU` conflict neither side asked for. Popping *during* the rebase is worse — the next commit may conflict too, and `git stash pop` against an unmerged index fails with `error: could not write index`, which reads like the work is gone when it is still in the stash.
 
    **Restore only once the whole operation is over.** A rebase of several commits stops at each conflicting one, so repeat step 1 through here for each. Only when long-form `git status` reports no operation in progress:
 
    ```bash
-   git apply --3way "$P"          # read the exit code
+   git apply --3way "$PARK/tracked.patch"                 # read the exit code
+   git -c core.quotePath=false diff --cached --name-only  # what it actually staged
+   git restore --staged -- <only those paths>             # back to step 4's shape
    ```
 
-   - **Exit 0** — the work went back cleanly. It landed in the index, so put it back the way step 4 left it and then drop the patch:
+   - **`git apply` exit 0** — the tracked work went back. Unstage exactly what the previous command printed, and nothing else: naming the untracked paths here is the same trap again, and it would leave a staged deletion the next commit sweeps up.
+   - **Non-zero** — the operation changed one of these paths too, and `--3way` has written conflict markers rather than choosing for you. That is the honest answer, and the reason this is not a `cp`: a copy would have silently overwritten the operation's version. **Keep the patch**, name it to the user, and resolve those hunks with them.
 
-     ```bash
-     git restore --staged -- <the same paths>
-     rm -f "$P"
-     ```
-
-   - **Non-zero** — the operation changed one of these paths too, and `--3way` has written conflict markers rather than choosing for you. That is the honest answer, and the reason this is not a `cp`: a copy would have silently overwritten the operation's version. **Keep the patch**, name it to the user, and resolve those hunks with them. Delete it only after they confirm their work is back.
-
-   **If you abort instead of finishing** (step 6 allows that when the operation itself was the mistake), the parked work does not come back on its own — `git rebase --abort` restores the tree to before the rebase, which is before the parking too, so their edits appear to have vanished. Apply the patch and say where it was:
+   Then move the untracked files back, **one refusal per occupied path**:
 
    ```bash
-   git apply --3way "$P" && git restore --staged -- <the tracked paths> && rm -f "$P"
+   # for each file under "$PARK/untracked": if the path now exists, do NOT overwrite it
    ```
+
+   A path that is occupied means the operation created something there — exactly the collision that made the parking necessary. Leave the operation's version, leave the user's copy in `$PARK`, and tell them both paths. Delete `$PARK` only when every file has been moved back.
+
+   **Then check, do not assume.** Compare `git status --porcelain --untracked-files=all` against what step 3 recorded: same paths, and the same first column. A staged `D` where step 4 left an unstaged one is the failure this step exists to prevent, and step 9's existence check cannot see it.
 
    Merge, cherry-pick and revert do not need any of this — all three finish with the user's modifications sitting in the working tree, exit 0, and commit nothing of theirs.
 
@@ -167,7 +169,9 @@ Run every command below and **read what it printed**. Two shapes account for eve
 
    **One `:(top)` argument per path.** Several paths inside a single pair of quotes is *one* pathspec containing spaces; it matches nothing, exits 0, and reads exactly like "all of it was committed". A rename forces this case — step 3 puts both the old and the new path on the list.
 
-   Each must still appear. A path that has gone quiet was committed by the operation. The `:(top)` prefix matters too: pathspecs resolve against the current directory while step 3 printed them relative to the repository root, so running this from a subdirectory silently matches nothing and reads the same wrong way. If step 3's list was empty, say so — there was no in-flight work to protect, and an empty check proves nothing.
+   Each must still appear, **and in the column step 3 recorded it in**. Existence alone is not enough: a path that came back *staged* when the user had it unstaged is one `git commit` away from being swept up, and it reads as present here. Compare the first two characters, not just the name.
+
+   A path that has gone quiet was committed by the operation. The `:(top)` prefix matters too: pathspecs resolve against the current directory while step 3 printed them relative to the repository root, so running this from a subdirectory silently matches nothing and reads the same wrong way. If step 3's list was empty, say so — there was no in-flight work to protect, and an empty check proves nothing.
 
    Then cross-check against what the operation actually recorded, using the boundary from step 1:
 
