@@ -22,16 +22,30 @@ rm -rf "$_mp"
 skips=0
 skip_case() { skips=$((skips+1)); printf '  skip      %-52s %s\n' "$1" "$2"; }
 
+# run_rollback <label> <from> <to> [<from> <to> ...]
+# More than one pair because some fixes are a *move*: undoing them means taking
+# lines out in one place and putting them back in another, and a single
+# substitution cannot express that.
 run_rollback() {
-  label=$1; frm=$2; to=$3
+  label=$1; shift
   cp "$SKILL" "$W/s.md"
-  python - "$W/s.md" "$frm" "$to" <<'PY' || { echo "  SETUP  $label"; return 1; }
+  python - "$W/s.md" "$@" <<'PY' || { echo "  SETUP  $label"; return 1; }
 import io, sys
-p, frm, to = sys.argv[1], sys.argv[2], sys.argv[3]
+p, rest = sys.argv[1], sys.argv[2:]
+if len(rest) % 2:
+    sys.exit('odd number of from/to arguments')
 t = io.open(p, encoding='utf-8', newline='').read()
-if t.count(frm) != 1:
-    sys.exit('anchor appears %d times: %r' % (t.count(frm), frm[:60]))
-io.open(p, 'w', encoding='utf-8', newline='').write(t.replace(frm, to))
+for i in range(0, len(rest), 2):
+    frm, to = rest[i], rest[i + 1]
+    # Exactly one, per pair, and against the text as edited so far - never
+    # "at least one". A drifted anchor that still matches somewhere is how a
+    # rollback quietly stops testing what its label claims, and this repo has
+    # shipped that three times. Checking the progressive text also catches a
+    # second pair whose anchor the first pair just disturbed.
+    if t.count(frm) != 1:
+        sys.exit('anchor appears %d times: %r' % (t.count(frm), frm[:60]))
+    t = t.replace(frm, to)
+io.open(p, 'w', encoding='utf-8', newline='').write(t)
 PY
   out=$(bash tests/parking_matrix.sh "$W/s.md" 2>&1)
   if printf '%s' "$out" | grep -q ', 0 failed'; then
@@ -86,6 +100,35 @@ run_rollback "manifest written before the move succeeds" \
      printf '"'"'%s\0'"'"' "$p" >> "$PARK/manifest" || die "parked $p but could not record it"' \
   '     printf '"'"'%s\0'"'"' "$p" >> "$PARK/manifest"
      mv -- "$p" "$PARK/untracked/$p" || die "cannot park $p (already parked: $(tr -d -c '"'"'\000'"'"' < "$PARK/manifest" | wc -c))"' || bad=1
+
+# The fix this checks is a *move*, so undoing it is two edits: take the
+# publish out of the top and put it back after the last move, which is
+# exactly v0.17.1's order. Nothing else changes, so if the matrix stays
+# green the recovery assertion in partial_case is not doing its job.
+run_rollback "state published after the moves, as in v0.17.1" \
+  '   printf '"'"'%s\n'"'"' "$PARK_NAME" > "$STATE.tmp" || die "cannot write state"
+   mv -- "$STATE.tmp" "$STATE" || die "cannot publish state"
+   mv -- "$G/lean-park-input" "$PARK/input" || die "cannot take the input list"' \
+  '   mv -- "$G/lean-park-input" "$PARK/input" || die "cannot take the input list"' \
+  '   done < "$PARK/untracked.list"' \
+  '   done < "$PARK/untracked.list"
+   printf '"'"'%s\n'"'"' "$PARK_NAME" > "$STATE.tmp" || die "cannot write state"
+   mv -- "$STATE.tmp" "$STATE" || die "cannot publish state"' || bad=1
+
+# Load-bearing, and only falsifiable because the matrix now feeds one
+# malformed list. Before that case existed this rollback would have
+# SURVIVED: every other input in the suite is built with printf '%s\0'.
+run_rollback "park stops checking that the input list is NUL-terminated" \
+  '   [ "$(tail -c 1 -- "$G/lean-park-input" | tr -d -c '"'"'\000'"'"' | wc -c)" -eq 1 ] ||
+     die "input list is not NUL-terminated - build it with printf '"'"'%s\\0'"'"'"' \
+  '   :' || bad=1
+
+# No case for the two `specs` guards in the park block. They are defence in
+# depth: with the NUL-termination check above them, a legal input list always
+# yields one spec per entry, so `-s "$PARK/specs"` and the arity comparison are
+# unreachable from any input this suite can build. Rolling them back therefore
+# cannot turn the matrix red, and a rollback that cannot fail is decoration.
+# They are labelled as such in the recipe rather than given a fabricated case.
 
 run_rollback "no collision guard on the way back" \
   '     if [ -e "$p" ] || [ -L "$p" ]; then HELD=1; continue; fi' \

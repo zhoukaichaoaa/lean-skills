@@ -1035,8 +1035,8 @@ jobs:
             || { echo "the parking matrix skipped cases; on this platform none may be"; exit 1; }
           # ...and the count itself, so a case that quietly stops being generated
           # cannot hide inside "0 failed"
-          grep -qE '^40 passed, 0 failed, 0 skipped' "$RUNNER_TEMP/pm.log" \
-            || { echo "expected 40 parking cases; the matrix shrank or grew"; exit 1; }
+          grep -qE '^41 passed, 0 failed, 0 skipped' "$RUNNER_TEMP/pm.log" \
+            || { echo "expected 41 parking cases; the matrix shrank or grew"; exit 1; }
           # ...and the cases that carry the awkward names by name, because a count
           # stays right while a case quietly turns into a duplicate of an easy one.
           # These are exactly the ones a broken capability probe drops first.
@@ -1050,7 +1050,7 @@ jobs:
           # the two standalone cases, which carry evidence a state name cannot:
           # that a half-finished park is recoverable, and that :(literal) keeps a
           # glob-shaped name from reaching a conflicted file
-          for c in "park fails partway" "glob name beside a conflicted file"; do
+          for c in "park fails partway" "glob name beside a conflicted file" "input list is not NUL-separated"; do
             grep -qxF "  ok    $c" "$RUNNER_TEMP/pm.log" \
               || { echo "the parking matrix never passed the case '$c'"; exit 1; }
           done

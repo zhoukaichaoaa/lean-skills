@@ -246,15 +246,19 @@ partial_case() {
     make_repo "$d" >/dev/null 2>&1
     printf 'wip\n' > one.txt; printf 'wip\n' > two.txt; printf 'wip\n' > three.txt
     printf 'RES0\n' > f.txt; git add f.txt
+    before=$(snapshot)
     write_input
-    mkdir -p "$d/bin"
+    # The shim lives outside the repo. Inside it, the test's own tooling shows up
+    # as untracked work in the very tree it is about to compare - a test that
+    # contaminates its subject cannot answer the question it is asking.
+    pbin="$WORK/partial-bin"; mkdir -p "$pbin"
     real_mv=$(command -v mv)
     { printf '#!/bin/sh\n'
       printf 'for a in "$@"; do case "$a" in */untracked/two.txt) echo "mv: injected" >&2; exit 1 ;; esac; done\n'
-      printf 'exec %s "$@"\n' "$real_mv"; } > "$d/bin/mv"
-    chmod +x "$d/bin/mv"
-    OLD_PATH=$PATH; PATH="$d/bin:$PATH"
-    [ "$(command -v mv)" = "$d/bin/mv" ] || { PATH=$OLD_PATH; echo "shim not on PATH" >&2; exit 41; }
+      printf 'exec %s "$@"\n' "$real_mv"; } > "$pbin/mv"
+    chmod +x "$pbin/mv"
+    OLD_PATH=$PATH; PATH="$pbin:$PATH"
+    [ "$(command -v mv)" = "$pbin/mv" ] || { PATH=$OLD_PATH; echo "shim not on PATH" >&2; exit 41; }
     ( cd "$d" && . "$WORK/park.sh" ) >/dev/null 2>&1
     prc=$?
     PATH=$OLD_PATH
@@ -268,6 +272,24 @@ partial_case() {
     done < "$pk/manifest"
     # the file whose move failed must still be where the user left it
     [ -f "$d/two.txt" ] || { echo "two.txt was lost by the failed move" >&2; exit 46; }
+    # Everything above only says the wreck is self-consistent. What the user
+    # needs is their work back, and that is a different claim: the parking area
+    # has to be findable, and restore has to hand it over. Without this the case
+    # passes on a state where the files exist but nothing can reach them.
+    [ -s "$d/.git/lean-parked.state" ] || {
+      echo "park failed leaving $pk with nothing pointing at it" >&2; exit 47; }
+    ( cd "$d" && env -u PARK -u PARK_NAME -u G -u STATE bash "$WORK/restore.sh" ) >/dev/null 2>&1 \
+      || { echo "restore would not recover a half-finished parking" >&2; exit 48; }
+    after=$(snapshot)
+    if [ "$after" != "$before" ]; then
+      echo "the tree did not come back to what it was before parking" >&2
+      diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") | head -8 >&2
+      exit 49
+    fi
+    [ -z "$(find "$d/.git" -maxdepth 1 -name 'lean-parked-*')" ] \
+      || { echo "the parking area outlived a successful recovery" >&2; exit 50; }
+    [ ! -e "$d/.git/lean-parked.state" ] \
+      || { echo "the state file outlived a successful recovery" >&2; exit 51; }
   ) 2>"$WORK/err.partial"
   rc=$?
   report "park fails partway" "$rc" "rc=$rc $(head -2 "$WORK/err.partial" | tr '\n' ' ')"
@@ -335,6 +357,44 @@ literal_case() {
     "rc=$rc $(grep -vE '^warning:|Falling back|^Applied|^Checking patch' "$WORK/err.literal" | head -2 | tr '\n' ' ')"
 }
 [ "$RUNNABLE" -eq 1 ] && literal_case
+
+# ---- the input list is not NUL-separated ---------------------------------
+# Every other case in this file builds the list with write_input, which always
+# uses printf '%s\0'. So nothing here has ever fed the recipe a malformed list,
+# and the NUL check in park was unfalsifiable: delete it and the whole matrix
+# stays green. `-s` does not help - a list written with '\n' is not empty, so
+# it passes, and then every `read -d ''` reads nothing and park runs to
+# completion having parked not one file while the patch covers the whole tree.
+malformed_input_case() {
+  d="$WORK/badinput"
+  ( set -u
+    make_repo "$d" >/dev/null 2>&1
+    printf 'wip\n'    > listed.txt        # the path the user would name
+    printf 'EDITED\n' > tracked.txt       # modified, and never named
+    before=$(snapshot)
+    g=$(git rev-parse --git-dir)
+    printf '%s\n' listed.txt > "$g/lean-park-input"   # newline, not NUL
+    ( cd "$d" && . "$WORK/park.sh" ) >/dev/null 2>&1
+    prc=$?
+    [ "$prc" -ne 0 ] || { echo "park accepted a newline-separated list" >&2; exit 61; }
+    [ -z "$(find "$d/.git" -maxdepth 1 -name 'lean-parked-*')" ] \
+      || { echo "park built a parking area from a malformed list" >&2; exit 62; }
+    [ ! -e "$d/.git/lean-parked.state" ] \
+      || { echo "park published state from a malformed list" >&2; exit 63; }
+    # the list is still where step 4 left it, so it can be rebuilt and retried
+    [ -s "$g/lean-park-input" ] || { echo "park consumed the list it rejected" >&2; exit 64; }
+    after=$(snapshot)
+    if [ "$after" != "$before" ]; then
+      echo "the worktree moved on a list park refused" >&2
+      diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") | head -6 >&2
+      exit 65
+    fi
+  ) 2>"$WORK/err.badinput"
+  rc=$?
+  report "input list is not NUL-separated" "$rc" \
+    "rc=$rc $(grep -vE '^warning:' "$WORK/err.badinput" | head -2 | tr '\n' ' ')"
+}
+[ "$RUNNABLE" -eq 1 ] && malformed_input_case
 
 echo
 echo "$pass passed, $fail failed, $skip skipped"

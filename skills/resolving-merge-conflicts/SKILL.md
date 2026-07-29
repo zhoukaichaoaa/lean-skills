@@ -138,15 +138,26 @@ Run every command below and **read what it printed**. Two shapes account for eve
    cd "$(git rev-parse --show-toplevel)" || die "no worktree"
    G="$(git rev-parse --git-dir)" || die "no git dir"
    STATE="$G/lean-parked.state"
-   [ ! -e "$STATE" ] || die "an unfinished parking is still open: $STATE"
+   [ ! -e "$STATE" ] || die "an unfinished parking is still open: $STATE. Run the restore block; if you have already taken its contents back by hand, delete $STATE"
+   # $G/lean-park-input is step 4's list, one NUL-terminated path per entry:
+   #   : > "$G/lean-park-input"
+   #   printf '%s\0' 'each/path/from/step 4' >> "$G/lean-park-input"
+   # Validate before creating anything: a list written with '\n' instead of '\0'
+   # is not empty, so `-s` passes, every `read -d ''` below then reads nothing,
+   # and the whole block runs to completion having parked not one file.
+   [ -s "$G/lean-park-input" ] || die "no input list"
+   [ "$(tail -c 1 -- "$G/lean-park-input" | tr -d -c '\000' | wc -c)" -eq 1 ] ||
+     die "input list is not NUL-terminated - build it with printf '%s\\0'"
    PARK_NAME="lean-parked-$(date +%s)-$$"
    PARK="$G/$PARK_NAME"
    [ ! -e "$PARK" ] || die "name collision: $PARK"
    mkdir -p -- "$PARK/untracked" || die "cannot create $PARK"
-   # $G/lean-park-input is step 4's list, one NUL-terminated path per entry:
-   #   : > "$G/lean-park-input"
-   #   printf '%s\0' 'each/path/from/step 4' >> "$G/lean-park-input"
-   [ -s "$G/lean-park-input" ] || die "no input list"
+   # Publish the state *before* the first move, not after the last one. A move
+   # that fails partway - and a crash, which no rollback code can catch - would
+   # otherwise leave the user's files inside $PARK with nothing pointing at it,
+   # and restore refuses to look for a parking area it was not told about.
+   printf '%s\n' "$PARK_NAME" > "$STATE.tmp" || die "cannot write state"
+   mv -- "$STATE.tmp" "$STATE" || die "cannot publish state"
    mv -- "$G/lean-park-input" "$PARK/input" || die "cannot take the input list"
    : > "$PARK/tracked"; : > "$PARK/untracked.list"; : > "$PARK/manifest"
    while IFS= read -r -d '' p; do
@@ -163,6 +174,19 @@ Run every command below and **read what it printed**. Two shapes account for eve
    while IFS= read -r -d '' p; do
      printf ':(literal,top)%s\0' "$p" >> "$PARK/specs" || die "cannot build pathspecs"
    done < "$PARK/input"
+   # xargs runs the command once even when its input is empty, and `git diff
+   # --binary --` with no pathspec diffs the *entire tree* - the patch would
+   # then carry files the user never named. (`-r` fixes this only on GNU.)
+   #
+   # These two are defence in depth, and the test suite does not prove them
+   # independently: with the NUL check above in place, a well-formed list
+   # always produces one spec per entry, so neither branch is reachable from a
+   # legal input. A case that cannot fail proves nothing, so rather than
+   # fabricate one, this says plainly what they are - a second line of defence
+   # if the loop above is ever changed, not an independently tested contract.
+   [ -s "$PARK/specs" ] || die "no pathspecs built from the input list"
+   [ "$(tr -d -c '\000' < "$PARK/specs" | wc -c)" -eq "$(tr -d -c '\000' < "$PARK/input" | wc -c)" ] ||
+     die "built fewer pathspecs than the input list holds"
    xargs -0 git diff --binary -- < "$PARK/specs" > "$PARK/tracked.patch" || die "git diff failed"
    while IFS= read -r -d '' p; do
      git checkout -- ":(literal,top)$p" || die "cannot restore $p from the index"
@@ -175,8 +199,6 @@ Run every command below and **read what it printed**. Two shapes account for eve
      mv -- "$p" "$PARK/untracked/$p" || die "cannot park $p (already parked: $(tr -d -c '\000' < "$PARK/manifest" | wc -c))"
      printf '%s\0' "$p" >> "$PARK/manifest" || die "parked $p but could not record it"
    done < "$PARK/untracked.list"
-   printf '%s\n' "$PARK_NAME" > "$STATE.tmp" || die "cannot write state"
-   mv -- "$STATE.tmp" "$STATE" || die "cannot publish state"
    ```
 
    **`git checkout --` takes tracked paths only, and so does everything else that reads a pathspec.** This is the rule, not the instance: **any git command given a pathspec it does not recognise rejects the whole command** (`error: pathspec ... did not match any file(s) known to git`, exit 1) rather than skipping that one path. It has now bitten `git restore --staged`, `git stash push`, `git checkout --` and `git restore --staged` again on the way back. `git diff` is the one exception — it ignores paths it does not know, which is why the patch line above can name them all.
@@ -204,7 +226,7 @@ Run every command below and **read what it printed**. Two shapes account for eve
      */*|*..*) die "state names a path, not a basename" ;;
    esac
    PARK="$G/$PARK_NAME"
-   [ -d "$PARK" ] || die "state points at $PARK, which is not there"
+   [ -d "$PARK" ] || die "state points at $PARK, which is not there. If you have already taken its contents back by hand, delete $STATE; nothing else will run until you do"
    HELD=0
    if [ -s "$PARK/tracked.patch" ]; then
      git apply --3way "$PARK/tracked.patch" || HELD=1
@@ -233,6 +255,8 @@ Run every command below and **read what it printed**. Two shapes account for eve
    - **The patch is empty** — the user had only untracked work, which is a perfectly ordinary case. Do not run `git apply` on it: an empty patch exits **128** with `No valid patches in input`, and reading that as the next case reports a conflict that does not exist. Go straight to the untracked files.
    - **`git apply` exit 0** — the tracked work went back. Unstage exactly the paths recorded in `$PARK/tracked` when you parked, and nothing else. Not `git diff --cached`: that lists the *whole* index, so unstaging all of it tears down whatever the user or the operation had staged for their own reasons. And not the untracked paths either — that is the pathspec trap again, and it would leave a staged deletion the next commit sweeps up.
    - **Non-zero on a non-empty patch** — the operation changed one of these paths too, and `--3way` has written conflict markers rather than choosing for you. That is the honest answer, and the reason this is not a `cp`: a copy would have silently overwritten the operation's version. **Keep the patch**, name it to the user, and resolve those hunks with them.
+
+   **If a parking area is ever left behind, say where it is and what is in it.** `$G/lean-parked-*` holds `tracked.patch` (apply it with `git apply --3way`), `untracked/` (the files as they were, path structure intact) and `manifest` (the NUL-separated record of what was moved). Nothing in there is lost — but nothing outside it knows it is there either, so a parking area the user is not told about is the same as one they cannot find. Tell them the path, then take it back with them.
 
    Then move them back **from the record written while parking**, one refusal per occupied path.
 
