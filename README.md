@@ -201,7 +201,11 @@ cd lean-skills
 5. 更新 CHANGELOG。
 6. **本地把 CI 的每条腿在干净克隆上原样跑一遍。** 这一步已经抓到过四个只在 CI 里才会暴露的 bug。
 7. **跑 `python tests/mutations.py`** —— 它会逐条把 CI 声称保护的东西故意改坏，确认对应的 step 真的会红；新增断言时同步加一个 case。**先看基线那几行**：它会在变异之前把每条 leg 原样跑一遍，任何一条基线是红的，这条 leg 上的所有"抓到"都是白捡的（0.17.0 发现五条里有三条如此）。同理，跳过的用例单独计数，永远不折进"抓到"。涉及“失败时会怎样”的断言要用**故障注入**（PATH 上垫一个假 `mv`、或用 PowerShell 函数遮蔽 `Move-Item`），并**先确认它在旧代码上是红的**—— 否则测的是空气（写 shim 时 `PATH` 里不能放 `C:/...` 这种带冒号的路径，Git Bash 会把它拆坏，shim 永远找不到）。旧的措辞：**对新增的断言做变异测试** —— 故意把被测的东西改坏，确认它真的会红。哑弹断言在这个仓库出现过不止一次（`-notmatch 'THEIRS'` 因大小写不敏感而永不触发）。
-8. commit & push → 三平台 CI 绿 → `git tag vX.Y.Z && git push --tags` → `gh release create` → 核对 GitHub 上的描述 → `claude plugin validate --strict .claude-plugin/plugin.json` 与 `--strict .claude-plugin/marketplace.json`（CI 跑的就是这两条）
+8. commit → push **main** → **等三平台 CI 全绿** → 然后才 `git tag vX.Y.Z && git push origin vX.Y.Z` → `gh release create` → 核对 GitHub 上的描述 → `claude plugin validate --strict .claude-plugin/plugin.json` 与 `--strict .claude-plugin/marketplace.json`（CI 跑的就是这两条）
+
+   > **顺序不是建议，是硬约束，因为标签不能移动。** 0.17.0 就是把这一步做反了：本机只有 Windows，另两个平台完全托给 CI，却在 CI 跑完前打了标签 —— 结果一个 `xargs -a`（GNU 专有，BSD 直接拒绝）让整个停靠配方在 macOS 上一步都走不了，只能作废重发 0.17.1。**本机验证不覆盖的平台，只能靠 CI；那就必须等它。**
+   >
+   > 同一次还暴露出：macOS 在第一个失败的 step 就停了，**后面所有 step 都是 skipped**。所以"CI 报了一个错"不等于"只有这一个错" —— 修完要重跑，别假设下游没问题。
 9. **发布说明里不要写 codeload 压缩包的 SHA-256。** 那些包 GitHub 实时生成，字节不保证稳定，读者核不出来。要给校验值就给 tag/commit/tree 的 git 对象哈希。签名公钥、验证方法，以及这些签名**能证明什么、不能证明什么**，见 [SIGNING.md](SIGNING.md)。
 
 ## 归属

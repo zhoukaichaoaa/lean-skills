@@ -9,6 +9,19 @@ cd "$(dirname "$0")/.." || exit 1
 SKILL=skills/resolving-merge-conflicts/SKILL.md
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 
+# Does this mv scan for options *after* the first operand? GNU does (it
+# permutes), BSD/macOS does not. It decides whether one rollback below can fail
+# at all: in park the dash-leading name is argument 1, which every mv parses as
+# an option, but in restore it is argument 2, and a non-permuting mv has already
+# stopped looking by then. The missing `--` is real on GNU and inert on BSD.
+MV_PERMUTES=0
+_mp=$(mktemp -d); : > "$_mp/src"
+( cd "$_mp" && mv src -dst ) 2>/dev/null || MV_PERMUTES=1
+rm -rf "$_mp"
+
+skips=0
+skip_case() { skips=$((skips+1)); printf '  skip      %-52s %s\n' "$1" "$2"; }
+
 run_rollback() {
   label=$1; frm=$2; to=$3
   cp "$SKILL" "$W/s.md"
@@ -44,9 +57,16 @@ run_rollback "no -- on the mv in park" \
   '     mv -- "$p" "$PARK/untracked/$p" || die "cannot park $p (already parked: $(tr -d -c '"'"'\000'"'"' < "$PARK/manifest" | wc -c))"' \
   '     mv "$p" "$PARK/untracked/$p" || die "cannot park $p"' || bad=1
 
-run_rollback "no -- on the mv in restore" \
-  '     mv -- "$PARK/untracked/$p" "$p" || die "cannot put $p back"' \
-  '     mv "$PARK/untracked/$p" "$p" || die "cannot put $p back"' || bad=1
+if [ "$MV_PERMUTES" -eq 1 ]; then
+  run_rollback "no -- on the mv in restore" \
+    '     mv -- "$PARK/untracked/$p" "$p" || die "cannot put $p back"' \
+    '     mv "$PARK/untracked/$p" "$p" || die "cannot put $p back"' || bad=1
+else
+  # Not a weakness in the test and not a reason to drop the `--`: on this mv the
+  # vector cannot exist, while on GNU it silently mangles the restore of any
+  # path whose name starts with a dash.
+  skip_case "no -- on the mv in restore" "this mv does not scan for options after the first operand"
+fi
 
 # An honest :(literal) case does exist, contrary to the note that used to sit
 # here -- that note generalised from `b*c.txt`, which NTFS genuinely cannot
@@ -73,5 +93,9 @@ run_rollback "no collision guard on the way back" \
 
 
 echo
-if [ "$bad" -eq 0 ]; then echo "every rollback was caught"; else echo "at least one rollback survived"; fi
+if [ "$bad" -eq 0 ]; then
+  echo "every rollback that could run was caught ($skips skipped)"
+else
+  echo "at least one rollback survived ($skips skipped)"
+fi
 [ "$bad" -eq 0 ]

@@ -649,6 +649,18 @@ jobs:
           MARKER = 'installed by lean-skills; uninstall removes only directories carrying this file'
           for path in ('install.sh', 'install.ps1'):
               assert MARKER in io.open(path, encoding='utf-8').read(), f'{path}: the ownership marker line changed'
+          # No NUL byte in a file that is supposed to be text. One slipped into
+          # CHANGELOG.md while documenting `tr -d -c '\000'`, and git promptly
+          # started reporting the file as binary - no diff, no review.
+          for d, _, fs in os.walk('.'):
+              if '.git' in d.split(os.sep):
+                  continue
+              for f in fs:
+                  q = os.path.join(d, f)
+                  if os.path.splitext(f)[1] not in ('.md', '.json', '.yml', '.sh', '.ps1', '.py'):
+                      continue
+                  if b'\x00' in io.open(q, 'rb').read():
+                      raise AssertionError(f'{q} contains a NUL byte; git will treat it as binary')
           assert 'code-review' not in resident + manual, 'never shadow the built-in /code-review'
           plugin = json.load(io.open('.claude-plugin/plugin.json', encoding='utf-8'))
           mk = json.load(io.open('.claude-plugin/marketplace.json', encoding='utf-8'))
@@ -1053,7 +1065,15 @@ jobs:
             fi
           done
           # ...and every single fix, rolled back one at a time, must turn it red
-          bash tests/parking_rollback.sh
+          bash tests/parking_rollback.sh | tee "$RUNNER_TEMP/rb.log"
+          # On Linux nothing may be skipped: GNU mv permutes its options, so the
+          # one platform-conditional rollback can and must run here. macOS is
+          # allowed exactly one skip - BSD mv stops scanning at the first
+          # operand, so that vector cannot be built there at all.
+          if [ "$RUNNER_OS" = Linux ]; then
+            grep -qF '(0 skipped)' "$RUNNER_TEMP/rb.log" \
+              || { echo "a rollback was skipped on Linux, where none may be"; exit 1; }
+          fi
 
       - name: installer state matrix, driven from the real install.sh
         if: runner.os != 'Windows'
