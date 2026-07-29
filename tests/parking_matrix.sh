@@ -83,6 +83,16 @@ make_repo() {
   git checkout -q master 2>/dev/null || git checkout -q main
   printf 'm1\n' > f.txt; git commit -aqm mine1
   printf 'm2\n' > f.txt
+  # `clash` builds the untracked-collision scenario, and it is worth spelling
+  # out because two rounds of review looked straight past it. mine2 creates
+  # ren-new.txt, the rebase stops on mine1's conflict, so mine2 has NOT been
+  # replayed and ren-new.txt is absent from the worktree. apply_state then
+  # renames into that very name, leaving it *untracked during the conflict* -
+  # exactly the shape the skill calls out ("a rename in flight is the common
+  # way to land there"). Without parking, `--continue` refuses with "The
+  # following untracked working tree files would be overwritten by merge".
+  # Measured: deleting the untracked half of the recipe turns clash / root,
+  # clash / sub and park fails partway red. This case is that guard rail.
   if [ "${2:-}" = clash ]; then printf 'made-by-rebase\n' > ren-new.txt; git add ren-new.txt; fi
   git add -A; git commit -qm mine2
   git rebase feat >/dev/null 2>&1

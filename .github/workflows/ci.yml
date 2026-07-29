@@ -609,6 +609,53 @@ jobs:
           $dirty = git status --porcelain
           if ($dirty) { throw "repo dirty at end: $dirty" }
 
+      - name: shellcheck
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shellcheck --version | head -2
+          # The recipe blocks are production code: a model runs them over the
+          # user's uncommitted work. They must be clean with no exclusions.
+          # This is not theoretical - v0.17.0 shipped `git diff --binary --
+          # $(tr ...)` unquoted, which word-split every tracked path containing
+          # a space straight out of the patch. 41 matrix cases missed it;
+          # shellcheck reports it as SC2046 on the line itself.
+          M=skills/resolving-merge-conflicts/SKILL.md
+          for b in park restore; do
+            awk -v tag="# lean-skills:$b" '
+              $0 ~ /^ *```/ { if (inb) { inb=0 }; next }
+              index($0, tag) { inb=1 }
+              inb { sub(/^   /, ""); print }
+            ' "$M" > "$RUNNER_TEMP/$b.sh"
+            test -s "$RUNNER_TEMP/$b.sh" || { echo "could not extract the $b block"; exit 1; }
+            shellcheck -s bash "$RUNNER_TEMP/$b.sh"
+          done
+          # ...and this check must be able to fail. Feed it the v0.17.0 block
+          # and require a finding, or a broken extractor would lint an empty
+          # file and pass for the rest of time.
+          git show v0.17.0:"$M" > "$RUNNER_TEMP/old.md" 2>/dev/null || true
+          if [ -s "$RUNNER_TEMP/old.md" ]; then
+            awk -v tag="# lean-skills:park" '
+              $0 ~ /^ *```/ { if (inb) { inb=0 }; next }
+              index($0, tag) { inb=1 }
+              inb { sub(/^   /, ""); print }
+            ' "$RUNNER_TEMP/old.md" > "$RUNNER_TEMP/old-park.sh"
+            if shellcheck -s bash "$RUNNER_TEMP/old-park.sh" >/dev/null 2>&1; then
+              echo "shellcheck passes v0.17.0's park block; it must not"; exit 1
+            fi
+          fi
+          # install.sh, minus one false positive: `CDPATH= cd -- ...` is a
+          # deliberate command-prefix assignment, not an attempt to set a var.
+          shellcheck -s sh -e SC1007 install.sh
+          # The test scripts, minus the idioms they are built on: SC2016 because
+          # the rollback anchors are literal shell text handed to python and must
+          # not expand; SC1091 because the sourced recipe only exists at run time;
+          # SC2086 on $args because splitting it into flags is the point.
+          shellcheck -s bash -e SC2016,SC1091,SC2086,SC2012 \
+            tests/parking_matrix.sh tests/parking_rollback.sh tests/install_matrix.sh
+          echo "shellcheck: recipe blocks clean with no exclusions; v0.17.0 still rejected"
+
       - name: manifests and frontmatter
         if: runner.os == 'Linux'
         shell: bash
@@ -1259,6 +1306,7 @@ jobs:
           allowed = {
               'install.ps1': 'PowerShell only exists on Windows',
               'manifests and frontmatter': 'parses files; no platform surface',
+              'shellcheck': 'a static linter; its findings do not vary by platform',
               'official plugin validation (strict)': 'installs an npm package; one platform is enough',
               'platform parity': 'this check itself',
           }
