@@ -665,7 +665,7 @@ jobs:
           # not expand; SC1091 because the sourced recipe only exists at run time;
           # SC2086 on $args because splitting it into flags is the point.
           shellcheck -s bash -e SC2016,SC1091,SC2086,SC2012 \
-            tests/parking_matrix.sh tests/parking_rollback.sh tests/install_matrix.sh
+            tests/parking_matrix.sh tests/parking_rollback.sh tests/install_matrix.sh tests/parking_crash.sh
           echo "shellcheck: recipe blocks clean with no exclusions; v0.17.0 still rejected"
 
       - name: manifests and frontmatter
@@ -1121,6 +1121,27 @@ jobs:
             git show "$old:skills/resolving-merge-conflicts/SKILL.md" > "$RUNNER_TEMP/old-$old.md" 2>/dev/null || continue
             if bash tests/parking_matrix.sh "$RUNNER_TEMP/old-$old.md" >/dev/null 2>&1; then
               echo "$old's recipe passes the parking matrix; it should not"; exit 1
+            fi
+          done
+          # SIGKILL at every step of park. The matrix cannot see this class at
+          # all - measured: reverting the fix below leaves the matrix at 41/0/0
+          # while the crash suite drops four cases. Its injection is a real
+          # SIGKILL because a catchable signal would be eaten by a trap, and a
+          # clean early exit would run handlers a crash never runs.
+          bash tests/parking_crash.sh | tee "$RUNNER_TEMP/crash.log"
+          grep -qE '^[0-9]+ passed, 0 failed' "$RUNNER_TEMP/crash.log" \
+            || { echo "the crash suite reported failures"; exit 1; }
+          # It must also be able to fail, or a broken extractor would report a
+          # clean sweep of nothing. v0.17.2's restore reads $PARK/manifest,
+          # which park writes *after* each move, so a kill in that window left
+          # the file parked, unlisted and never returned - with restore exiting
+          # 0. That released version is the fixture: no in-line rewriting, and
+          # it stays honest even if the current wording moves.
+          for old in v0.17.2; do
+            git show "$old:skills/resolving-merge-conflicts/SKILL.md" > "$RUNNER_TEMP/old-$old.md" 2>/dev/null || continue
+            if bash tests/parking_crash.sh "$RUNNER_TEMP/old-$old.md" >/dev/null 2>&1; then
+              echo "the crash suite passes $old, whose restore trusts the manifest; it must not"
+              exit 1
             fi
           done
           # ...and every single fix, rolled back one at a time, must turn it red

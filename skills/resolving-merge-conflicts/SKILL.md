@@ -237,12 +237,21 @@ Run every command below and **read what it printed**. Two shapes account for eve
        git restore --staged -- ":(literal,top)$p" || die "cannot unstage $p"
      done < "$PARK/tracked"
    fi
-   while IFS= read -r -d '' p; do
+   # The parking area itself is the record - not the manifest. The manifest is
+   # written *after* each move, so a crash in that window leaves a file parked
+   # and unlisted, and a restore that reads the manifest walks straight past
+   # it. Measured: SIGKILL between the mv and the manifest write left the file
+   # in the parking area, gone from the worktree, and restore still exited 0.
+   # Reversing the two only moves the window - then the manifest can name a
+   # file that was never moved. Reading the directory has no window at all.
+   find "$PARK/untracked" -mindepth 1 ! -type d -print0 > "$PARK/present" 2>/dev/null || :
+   while IFS= read -r -d '' src; do
+     p=${src#"$PARK/untracked/"}
      if [ -e "$p" ] || [ -L "$p" ]; then HELD=1; continue; fi
      case "$p" in */*) d=${p%/*} ;; *) d=. ;; esac   # not dirname: see park
      mkdir -p -- "$d" || die "cannot make a home for $p"
-     mv -- "$PARK/untracked/$p" "$p" || die "cannot put $p back"
-   done < "$PARK/manifest"
+     mv -- "$src" "$p" || die "cannot put $p back"
+   done < "$PARK/present"
    # `-quit` is not in every find; one line of output is all this needs
    LEFT="$(find "$PARK/untracked" -mindepth 1 ! -type d -print 2>/dev/null | head -n 1)"
    if [ "$HELD" -eq 0 ] && [ -z "$LEFT" ]; then
