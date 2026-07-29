@@ -132,7 +132,11 @@ ABSCASE_GOOD = '  case "$CLAUDE_SKILLS_DIR" in\n    /*) : ;;'
 
 ABSCASE_BAD = '  case "$CLAUDE_SKILLS_DIR" in\n    " "*) : ;;\n    /*) : ;;'
 
-PARK_GOOD = code_line(MC, 'git diff --binary')
+# The patch line is the one the two "parks with cp/stash again" cases replace.
+# It no longer *starts* with git: since 0.17.1 the pathspecs reach git over NUL
+# through xargs, because `xargs -a` is not portable and the unquoted $(...) it
+# replaced dropped any tracked path containing a space.
+PARK_GOOD = code_line(MC, 'xargs -0 git diff --binary')
 
 PARK_STASH = '   git stash push -u -- <each tracked path from step 4>'
 

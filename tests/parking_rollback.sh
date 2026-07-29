@@ -40,11 +40,11 @@ run_rollback "restore trusts an inherited PARK instead of the state file" \
   '   PARK_NAME="$(cat -- "$STATE")" || die "cannot read state"' \
   '   PARK_NAME="${PARK_NAME:?}"' || bad=1
 
-run_rollback "no -- on dirname/mv in park" \
-  '     mv -- "$p" "$PARK/untracked/$p" || die "cannot park $p (already parked: $(tr -cd '"'"'\0'"'"' < "$PARK/manifest" | wc -c))"' \
+run_rollback "no -- on the mv in park" \
+  '     mv -- "$p" "$PARK/untracked/$p" || die "cannot park $p (already parked: $(tr -d -c '"'"'\000'"'"' < "$PARK/manifest" | wc -c))"' \
   '     mv "$p" "$PARK/untracked/$p" || die "cannot park $p"' || bad=1
 
-run_rollback "no -- on dirname/mv in restore" \
+run_rollback "no -- on the mv in restore" \
   '     mv -- "$PARK/untracked/$p" "$p" || die "cannot put $p back"' \
   '     mv "$PARK/untracked/$p" "$p" || die "cannot put $p back"' || bad=1
 
@@ -62,10 +62,10 @@ run_rollback "checkout loses :(literal) and reaches a conflicted file" \
   '     git checkout -- ":(top)$p" || die "cannot restore $p from the index"' || bad=1
 
 run_rollback "manifest written before the move succeeds" \
-  '     mv -- "$p" "$PARK/untracked/$p" || die "cannot park $p (already parked: $(tr -cd '"'"'\0'"'"' < "$PARK/manifest" | wc -c))"
+  '     mv -- "$p" "$PARK/untracked/$p" || die "cannot park $p (already parked: $(tr -d -c '"'"'\000'"'"' < "$PARK/manifest" | wc -c))"
      printf '"'"'%s\0'"'"' "$p" >> "$PARK/manifest" || die "parked $p but could not record it"' \
   '     printf '"'"'%s\0'"'"' "$p" >> "$PARK/manifest"
-     mv -- "$p" "$PARK/untracked/$p" || die "cannot park $p (already parked: $(tr -cd '"'"'\0'"'"' < "$PARK/manifest" | wc -c))"' || bad=1
+     mv -- "$p" "$PARK/untracked/$p" || die "cannot park $p (already parked: $(tr -d -c '"'"'\000'"'"' < "$PARK/manifest" | wc -c))"' || bad=1
 
 run_rollback "no collision guard on the way back" \
   '     if [ -e "$p" ] || [ -L "$p" ]; then HELD=1; continue; fi' \

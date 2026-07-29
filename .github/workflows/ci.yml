@@ -856,13 +856,33 @@ jobs:
           # exits 0, while `checkout --` over a conflicted a1.txt is rejected whole.
           consumers=$(grep -E "^ *git (restore --staged|checkout|diff --binary) " "$RUNNER_TEMP/mc-cmds.txt" || true)
           test -n "$consumers" || { echo "the path-consuming recipes vanished"; exit 1; }
-          # the one exception is the patch built from $PARK/specs, whose every line
-          # the recipe writes as :(literal,top) itself
-          consumers=$(grep -vF 'tr '"'"'\n'"'"' '"'"' '"'"' < "$PARK/specs"' <<<"$consumers" || true)
           notop=$(grep -v ":(literal,top)" <<<"$consumers" || true)
           test -z "$notop" || { echo "a path-consuming recipe lost its :(literal,top):"; echo "$notop"; exit 1; }
-          grep -qF "printf ':(literal,top)%s\\n'" "$RUNNER_TEMP/mc-cmds.txt" \
-            || { echo "the parked pathspecs are no longer built as :(literal,top)"; exit 1; }
+          # ...and the pathspecs handed to the patch must be built the same way,
+          # NUL-terminated so they never pass through word splitting: v0.17.0
+          # joined them with an unquoted $(...) and lost every path with a space
+          grep -qF "printf ':(literal,top)%s\\0'" "$RUNNER_TEMP/mc-cmds.txt" \
+            || { echo "the parked pathspecs are no longer built as NUL-terminated :(literal,top)"; exit 1; }
+          grep -qF 'xargs -0 git diff --binary --' "$RUNNER_TEMP/mc-cmds.txt" \
+            || { echo "the patch no longer takes its pathspecs over NUL"; exit 1; }
+          # GNU-only spellings that leave the recipe broken on macOS. `xargs -a`
+          # made every parking case fail there with "invalid option -- a"; BSD
+          # dirname takes no options at all, so `dirname --` eats the `--`.
+          # comments stripped first: this file explains these very spellings, and
+          # matching the explanation instead of the code is its own dead assertion
+          grep -vE '^ *#' "$RUNNER_TEMP/mc-cmds.txt" > "$RUNNER_TEMP/mc-code.txt"
+          test -s "$RUNNER_TEMP/mc-code.txt"
+          # regexes, not fixed strings: v0.17.0 spelled it `xargs -0 -a`, so a
+          # literal "xargs -a" would have sailed straight past the very bug that
+          # prompted this check
+          # each of these was verified to match v0.17.0's recipe and not this one;
+          # a pattern that matches neither is a dead assertion and does not belong
+          for gnuism in 'xargs( +-[^ ]+)* +-a\b' 'dirname +--' '-print +-quit'; do
+            if grep -qE -- "$gnuism" "$RUNNER_TEMP/mc-code.txt"; then
+              echo "the recipe matches /$gnuism/, which is not portable to BSD/macOS:"
+              grep -nE -- "$gnuism" "$RUNNER_TEMP/mc-code.txt"; exit 1
+            fi
+          done
           # ...and the recipe must refuse to apply an empty patch
           grep -qF 'if [ -s "$PARK/tracked.patch" ]; then' "$RUNNER_TEMP/mc-cmds.txt" \
             || { echo "the empty-patch guard is gone"; exit 1; }
@@ -1021,6 +1041,16 @@ jobs:
           for c in "park fails partway" "glob name beside a conflicted file"; do
             grep -qxF "  ok    $c" "$RUNNER_TEMP/pm.log" \
               || { echo "the parking matrix never passed the case '$c'"; exit 1; }
+          done
+          # ...and a recipe that used to be broken must still be caught, or the
+          # matrix has stopped discriminating. v0.17.0 built its pathspecs with
+          # `xargs -a` (which BSD xargs rejects) and joined them with an unquoted
+          # $(...) (which splits a tracked path on its spaces).
+          for old in v0.17.0; do
+            git show "$old:skills/resolving-merge-conflicts/SKILL.md" > "$RUNNER_TEMP/old-$old.md" 2>/dev/null || continue
+            if bash tests/parking_matrix.sh "$RUNNER_TEMP/old-$old.md" >/dev/null 2>&1; then
+              echo "$old's recipe passes the parking matrix; it should not"; exit 1
+            fi
           done
           # ...and every single fix, rolled back one at a time, must turn it red
           bash tests/parking_rollback.sh

@@ -155,14 +155,24 @@ Run every command below and **read what it printed**. Two shapes account for eve
      else printf '%s\0' "$p" >> "$PARK/untracked.list" || die "cannot record $p"
      fi
    done < "$PARK/input"
-   xargs -0 -a "$PARK/input" -I{} printf ':(literal,top)%s\n' {} > "$PARK/specs" || die "cannot build pathspecs"
-   git diff --binary -- $(tr '\n' ' ' < "$PARK/specs") > "$PARK/tracked.patch" || die "git diff failed"
+   # NUL all the way into git: `xargs -a` is a GNU extension that BSD/macOS
+   # xargs rejects outright, and the newline-joined `$(...)` this replaced was
+   # split on whitespace by the shell, so a tracked path with a space in it
+   # silently never reached the patch.
+   : > "$PARK/specs"
+   while IFS= read -r -d '' p; do
+     printf ':(literal,top)%s\0' "$p" >> "$PARK/specs" || die "cannot build pathspecs"
+   done < "$PARK/input"
+   xargs -0 git diff --binary -- < "$PARK/specs" > "$PARK/tracked.patch" || die "git diff failed"
    while IFS= read -r -d '' p; do
      git checkout -- ":(literal,top)$p" || die "cannot restore $p from the index"
    done < "$PARK/tracked"
    while IFS= read -r -d '' p; do
-     mkdir -p -- "$PARK/untracked/$(dirname -- "$p")" || die "cannot make a home for $p"
-     mv -- "$p" "$PARK/untracked/$p" || die "cannot park $p (already parked: $(tr -cd '\0' < "$PARK/manifest" | wc -c))"
+     # not `dirname -- "$p"`: BSD dirname takes no options, so the `--` that
+     # protects a name like -draft.txt on GNU becomes the argument on macOS
+     case "$p" in */*) d=${p%/*} ;; *) d=. ;; esac
+     mkdir -p -- "$PARK/untracked/$d" || die "cannot make a home for $p"
+     mv -- "$p" "$PARK/untracked/$p" || die "cannot park $p (already parked: $(tr -d -c '\000' < "$PARK/manifest" | wc -c))"
      printf '%s\0' "$p" >> "$PARK/manifest" || die "parked $p but could not record it"
    done < "$PARK/untracked.list"
    printf '%s\n' "$PARK_NAME" > "$STATE.tmp" || die "cannot write state"
@@ -207,10 +217,12 @@ Run every command below and **read what it printed**. Two shapes account for eve
    fi
    while IFS= read -r -d '' p; do
      if [ -e "$p" ] || [ -L "$p" ]; then HELD=1; continue; fi
-     mkdir -p -- "$(dirname -- "$p")" || die "cannot make a home for $p"
+     case "$p" in */*) d=${p%/*} ;; *) d=. ;; esac   # not dirname: see park
+     mkdir -p -- "$d" || die "cannot make a home for $p"
      mv -- "$PARK/untracked/$p" "$p" || die "cannot put $p back"
    done < "$PARK/manifest"
-   LEFT="$(find "$PARK/untracked" -mindepth 1 ! -type d -print -quit)"
+   # `-quit` is not in every find; one line of output is all this needs
+   LEFT="$(find "$PARK/untracked" -mindepth 1 ! -type d -print 2>/dev/null | head -n 1)"
    if [ "$HELD" -eq 0 ] && [ -z "$LEFT" ]; then
      rm -f -- "$STATE" && rm -rf -- "$PARK"
    else

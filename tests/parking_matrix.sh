@@ -66,6 +66,10 @@ make_repo() {
   printf 'gone\n'  > doomed.txt
   printf 'old\n'   > ren-old.txt
   printf 'x\n'     > deep/er/nested.txt
+  # A *tracked* path with a space. The untracked ones were never enough: the
+  # patch is built from the tracked list only, so a recipe that word-splits its
+  # pathspecs drops this file silently and every existing case still passed.
+  printf 'orig\n'  > 'my tracked notes.txt'
   printf 'g\n'     > 'a[1].txt'
   # a decoy: the glob a[1].txt matches a1.txt, so a pathspec without :(literal)
   # would revert a file the user never named. Brackets are used rather than a
@@ -98,7 +102,9 @@ apply_state() {
     mixed)        printf 'edited\n' > tracked.txt
                   git rm -q doomed.txt; git restore --staged -- doomed.txt
                   printf 'wip\n' > brandnew.txt ;;
-    spacepath)    printf 'wip\n' > 'my notes.txt'; printf 'edited\n' > tracked.txt ;;
+    spacepath)    printf 'wip\n' > 'my notes.txt'          # untracked, moved by mv
+                  printf 'edited\n' > 'my tracked notes.txt'  # tracked, carried by the patch
+                  printf 'edited\n' > tracked.txt ;;
     utf8path)     printf 'wip\n' > "$(printf 'caf\303\251.txt')"; printf 'edited\n' > tracked.txt ;;
     dashpath)     printf 'wip\n' > ./-draft.txt ;;
     globpath)     printf 'wip
