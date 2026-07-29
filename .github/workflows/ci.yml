@@ -568,6 +568,22 @@ jobs:
           [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path .\install.ps1), [ref]$null, [ref]$perr)
           if ($perr) { throw "install.ps1 parse errors: $($perr -join '; ')" }
 
+          # The same state matrix install_matrix.sh runs against install.sh. These
+          # children write to stderr by design, and 2>&1 on a native command under
+          # ErrorActionPreference=Stop becomes a terminating NativeCommandError.
+          $prevEAP = $ErrorActionPreference
+          $ErrorActionPreference = 'Continue'
+          & powershell -NoProfile -File ./tests\install_matrix.ps1 > "$env:RUNNER_TEMP\psmatrix.log" 2>&1
+          $mrc = $LASTEXITCODE
+          git show v0.12.0:install.ps1 | Out-File -FilePath "$env:RUNNER_TEMP\old.ps1" -Encoding utf8
+          & powershell -NoProfile -File ./tests\install_matrix.ps1 "$env:RUNNER_TEMP\old.ps1" > "$env:RUNNER_TEMP\psold.log" 2>&1
+          $orc = $LASTEXITCODE
+          $ErrorActionPreference = $prevEAP
+          if ($mrc -ne 0) { Get-Content "$env:RUNNER_TEMP\psmatrix.log" | Select-Object -Last 20; throw "the PowerShell installer matrix failed" }
+          # ...and a version that used to fail must still fail, or the matrix has
+          # stopped detecting anything
+          if ($orc -eq 0) { throw "v0.12.0 passes the installer matrix; it should not" }
+
           $dirty = git status --porcelain
           if ($dirty) { throw "repo dirty at end: $dirty" }
 

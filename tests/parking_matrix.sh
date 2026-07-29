@@ -81,6 +81,9 @@ apply_state() {
                  git restore --staged -- ren-old.txt ren-new.txt 2>/dev/null ;;
     untrackedonly)
                  printf 'wip\n' > brandnew.txt; mkdir -p deep/er; printf 'wip2\n' > deep/er/mine.txt ;;
+    spacepath)   printf 'wip\n' > 'my notes.txt'; printf 'edited\n' > tracked.txt ;;
+    utf8path)    printf 'wip\n' > "$(printf 'caf\303\251.txt')"; printf 'edited\n' > tracked.txt ;;
+    newlinepath) printf 'wip\n' > "$(printf 'two\nlines.txt')" ;;
     symlink)     ln -s tracked.txt userlink ;;
     brokenlink)  ln -s nowhere-at-all userbroken ;;
     linkmixed)   ln -s tracked.txt userlink; ln -s nowhere userbroken
@@ -175,7 +178,16 @@ echo "recipe source: $SKILL"
 if [ "$RUNNABLE" -eq 0 ]; then
   echo "  !! this skill has no runnable lean-skills:park / :restore blocks"
 fi
-for s in tracked staged deleted renamed untrackedonly mixed none clash; do
+# A real newline in a filename is not storable on every filesystem: NTFS
+# substitutes a private-use character, so the case would test nothing there.
+NEWLINE_OK=0
+_nl=$(mktemp -d)
+if printf x > "$_nl/$(printf 'a\nb')" 2>/dev/null &&
+   [ "$(find "$_nl" -type f | wc -l)" -eq 1 ] &&
+   find "$_nl" -type f | od -c | grep -q '\\n'; then NEWLINE_OK=1; fi
+rm -rf "$_nl"
+
+for s in tracked staged deleted renamed untrackedonly mixed none clash spacepath utf8path; do
   run_case "$s" root
   run_case "$s" sub
 done
@@ -186,6 +198,12 @@ if [ "$SYMLINKS" -eq 1 ]; then
   done
 else
   echo "  skip  symlink / brokenlink / linkmixed (this platform makes copies, not links)"
+fi
+if [ "$NEWLINE_OK" -eq 1 ]; then
+  run_case newlinepath root
+  run_case newlinepath sub
+else
+  echo "  skip  newlinepath (this filesystem cannot hold a newline in a name)"
 fi
 
 # Abandoning after parking must leave the work recoverable, not gone: the patch

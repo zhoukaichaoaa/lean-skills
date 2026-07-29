@@ -158,6 +158,8 @@ inject_case() {   # $1 label  $2 occupant  $3 which mv fails
 }
 for occ in dir file $( [ "$SYMLINKS" -eq 1 ] && echo broken ); do
   inject_case "swap-in fails over a $occ" "$occ" inplace
+  # the other half of the window: moving the old target aside is what fails
+  inject_case "move-aside fails over a $occ" "$occ" aside
 done
 
 echo
