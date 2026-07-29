@@ -73,8 +73,8 @@ run_rollback "no -- on the mv in park" \
 
 if [ "$MV_PERMUTES" -eq 1 ]; then
   run_rollback "no -- on the mv in restore" \
-    '     mv -- "$PARK/untracked/$p" "$p" || die "cannot put $p back"' \
-    '     mv "$PARK/untracked/$p" "$p" || die "cannot put $p back"' || bad=1
+    '     mv -- "$src" "$p" || die "cannot put $p back"' \
+    '     mv "$src" "$p" || die "cannot put $p back"' || bad=1
 else
   # Not a weakness in the test and not a reason to drop the `--`: on this mv the
   # vector cannot exist, while on GNU it silently mangles the restore of any
