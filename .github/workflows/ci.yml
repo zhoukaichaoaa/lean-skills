@@ -573,16 +573,38 @@ jobs:
           # ErrorActionPreference=Stop becomes a terminating NativeCommandError.
           $prevEAP = $ErrorActionPreference
           $ErrorActionPreference = 'Continue'
-          & powershell -NoProfile -File ./tests\install_matrix.ps1 > "$env:RUNNER_TEMP\psmatrix.log" 2>&1
-          $mrc = $LASTEXITCODE
           git show v0.12.0:install.ps1 | Out-File -FilePath "$env:RUNNER_TEMP\old.ps1" -Encoding utf8
-          & powershell -NoProfile -File ./tests\install_matrix.ps1 "$env:RUNNER_TEMP\old.ps1" > "$env:RUNNER_TEMP\psold.log" 2>&1
-          $orc = $LASTEXITCODE
+
+          # Both interpreters, because they are not the same language: 5.1 and
+          # pwsh 7 differ on native-command redirection, on -LiteralPath, and on
+          # what Test-Path says about a link whose target is gone. The installer
+          # ships to users of both, so a green on one proves nothing about the other.
+          foreach ($sh in @('powershell', 'pwsh')) {
+            if (-not (Get-Command $sh -ErrorAction SilentlyContinue)) {
+              # On a GitHub runner both interpreters are present, so a missing one
+              # is a broken image, not a limitation -- fail rather than quietly
+              # halve the coverage. Off CI (a developer box without pwsh 7) say so
+              # loudly instead; a silent skip is what this whole release is about.
+              if ($env:CI) { throw "$sh is not on PATH; this runner cannot prove the installer works under it" }
+              Write-Host "  SKIP  $sh is not installed here; its leg was NOT run"
+              continue
+            }
+            & $sh -NoProfile -File ./tests\install_matrix.ps1 > "$env:RUNNER_TEMP\ps-$sh.log" 2>&1
+            $mrc = $LASTEXITCODE
+            $tail = (Get-Content "$env:RUNNER_TEMP\ps-$sh.log" | Where-Object { $_ -match 'passed,' } | Select-Object -Last 1)
+            Write-Host "$sh -> $tail"
+            if ($mrc -ne 0) { Get-Content "$env:RUNNER_TEMP\ps-$sh.log" | Select-Object -Last 20; throw "the installer matrix failed under $sh" }
+            # A skip is not a pass. Windows runners have Developer Mode on, so
+            # the symlink cases must genuinely execute here.
+            if ($tail -notmatch '^28 passed, 0 failed, 0 skipped$') {
+              throw "$sh ran '$tail'; expected 28 passed, 0 failed, 0 skipped"
+            }
+            # ...and a version that used to fail must still fail under this
+            # interpreter too, or the matrix has stopped detecting anything
+            & $sh -NoProfile -File ./tests\install_matrix.ps1 "$env:RUNNER_TEMP\old.ps1" > "$env:RUNNER_TEMP\psold-$sh.log" 2>&1
+            if ($LASTEXITCODE -eq 0) { throw "v0.12.0 passes the installer matrix under $sh; it should not" }
+          }
           $ErrorActionPreference = $prevEAP
-          if ($mrc -ne 0) { Get-Content "$env:RUNNER_TEMP\psmatrix.log" | Select-Object -Last 20; throw "the PowerShell installer matrix failed" }
-          # ...and a version that used to fail must still fail, or the matrix has
-          # stopped detecting anything
-          if ($orc -eq 0) { throw "v0.12.0 passes the installer matrix; it should not" }
 
           $dirty = git status --porcelain
           if ($dirty) { throw "repo dirty at end: $dirty" }
@@ -613,11 +635,15 @@ jobs:
               (manual if re.search(r'^disable-model-invocation:\s*true', fm, re.M)
                       else resident).append(d)
           RESIDENT = {'verification-before-completion', 'receiving-code-review',
-                      'diagnosing-bugs', 'spec-review', 'resolving-merge-conflicts'}
-          MANUAL   = {'grill-me', 'implement', 'tdd', 'worktree'}
+                      'diagnosing-bugs', 'spec-review'}
+          # resolving-merge-conflicts is manual as of 0.17.0: it drives a
+          # destructive recipe over the user's uncommitted work, so it is not
+          # something the model may reach for on its own reading of a description
+          MANUAL   = {'grill-me', 'implement', 'tdd', 'worktree',
+                      'resolving-merge-conflicts'}
           assert set(resident) == RESIDENT, ('resident set changed', sorted(resident))
           assert set(manual) == MANUAL, ('manual set changed', sorted(manual))
-          assert len(resident) == 5 and len(manual) == 4, (resident, manual)
+          assert len(resident) == 4 and len(manual) == 5, (resident, manual)
           # the ownership marker's first line is a cross-version contract: change it
           # and every existing install becomes unclaimable
           MARKER = 'installed by lean-skills; uninstall removes only directories carrying this file'
@@ -799,7 +825,7 @@ jobs:
           # combined test can fail without failing the step
           test -s "$RUNNER_TEMP/mc-cmds.txt"
           test -s "$RUNNER_TEMP/sr-cmds.txt"
-          for want in 'merge-base --all HEAD <that head>' 'REBASE_HEAD^<n> REBASE_HEAD'                       'CHERRY_PICK_HEAD^<n> CHERRY_PICK_HEAD' 'REVERT_HEAD^<n> REVERT_HEAD'                       'rev-list --parents -n 1' 'show-toplevel' 'git diff --binary --' 'git apply --3way' 'git checkout -- ":(top)$p"' 'diff --cached --name-only' '$TRACKED' '$UNTRACKED' 'git restore --staged --' 'name-status -M' 'MERGE_HEAD"'                       'hash-object -t tree'; do
+          for want in 'merge-base --all HEAD <that head>' 'REBASE_HEAD^<n> REBASE_HEAD'                       'CHERRY_PICK_HEAD^<n> CHERRY_PICK_HEAD' 'REVERT_HEAD^<n> REVERT_HEAD'                       'rev-list --parents -n 1' 'show-toplevel' 'git diff --binary --' 'git apply --3way' 'git checkout -- ":(literal,top)$p"' 'git restore --staged -- ":(literal,top)$p"' 'done < "$PARK/tracked"' 'done < "$PARK/untracked.list"' 'done < "$PARK/manifest"' 'name-status -M' 'MERGE_HEAD"'                       'hash-object -t tree'; do
             grep -qF "$want" "$RUNNER_TEMP/mc-cmds.txt" || { echo "not prescribed in a code block: $want"; exit 1; }
           done
           for want in 'cat-file -e' 'refs/heads/<default>:refs/remotes/origin/<default>' 'ls-remote --symref'; do
@@ -821,13 +847,22 @@ jobs:
           # index, so it carries the conflict resolution, replays it after the rebase
           # and manufactures a fresh conflict - and popping mid-rebase fails outright.
           # Every prescribed command that consumes a path printed by status must say
-          # :(top). status prints repo-root-relative paths; these resolve against the
-          # current directory, so from a subdirectory `git diff` returns 0 with an
-          # empty patch while restore/checkout exit 1 and leave the work staged.
+          # :(literal,top). `top` because status prints repo-root-relative paths and a
+          # bare path resolves against the current directory, so from a subdirectory
+          # `git diff` returns 0 with an empty patch while restore/checkout exit 1 and
+          # leave the work staged. `literal` because status also prints names like
+          # a[1].txt, and git matches a pathspec both literally and as a wildcard:
+          # measured, `restore --staged -- ':(top)a[1].txt'` unstages a1.txt too and
+          # exits 0, while `checkout --` over a conflicted a1.txt is rejected whole.
           consumers=$(grep -E "^ *git (restore --staged|checkout|diff --binary) " "$RUNNER_TEMP/mc-cmds.txt" || true)
           test -n "$consumers" || { echo "the path-consuming recipes vanished"; exit 1; }
-          notop=$(grep -v ":(top)" <<<"$consumers" || true)
-          test -z "$notop" || { echo "a path-consuming recipe lost its :(top):"; echo "$notop"; exit 1; }
+          # the one exception is the patch built from $PARK/specs, whose every line
+          # the recipe writes as :(literal,top) itself
+          consumers=$(grep -vF 'tr '"'"'\n'"'"' '"'"' '"'"' < "$PARK/specs"' <<<"$consumers" || true)
+          notop=$(grep -v ":(literal,top)" <<<"$consumers" || true)
+          test -z "$notop" || { echo "a path-consuming recipe lost its :(literal,top):"; echo "$notop"; exit 1; }
+          grep -qF "printf ':(literal,top)%s\\n'" "$RUNNER_TEMP/mc-cmds.txt" \
+            || { echo "the parked pathspecs are no longer built as :(literal,top)"; exit 1; }
           # ...and the recipe must refuse to apply an empty patch
           grep -qF 'if [ -s "$PARK/tracked.patch" ]; then' "$RUNNER_TEMP/mc-cmds.txt" \
             || { echo "the empty-patch guard is gone"; exit 1; }
@@ -952,19 +987,55 @@ jobs:
           git merge-base refs/remotes/origin/dev HEAD >/dev/null
           echo "git recipes: merge range, restore split, per-operation refs and base selection all behave as documented"
 
-      - name: parking and installer state matrices, driven from the real sources
+      - name: parking recipes, driven from SKILL.md itself
         if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
           # These extract the marked blocks from SKILL.md and run them, so the
           # document is what is under test - not a copy of it in the test.
-          bash tests/parking_matrix.sh
+          # A skipped case reads like a passing one in a total. Linux and macOS
+          # can both hold a newline and a tab in a name and can both make real
+          # symlinks, so here every case must actually run: a skip means a probe
+          # regressed, not that the platform is limited.
+          bash tests/parking_matrix.sh | tee "$RUNNER_TEMP/pm.log"
+          grep -qE '[0-9]+ passed, 0 failed, 0 skipped' "$RUNNER_TEMP/pm.log" \
+            || { echo "the parking matrix skipped cases; on this platform none may be"; exit 1; }
+          # ...and the count itself, so a case that quietly stops being generated
+          # cannot hide inside "0 failed"
+          grep -qE '^40 passed, 0 failed, 0 skipped' "$RUNNER_TEMP/pm.log" \
+            || { echo "expected 40 parking cases; the matrix shrank or grew"; exit 1; }
+          # ...and the cases that carry the awkward names by name, because a count
+          # stays right while a case quietly turns into a duplicate of an easy one.
+          # These are exactly the ones a broken capability probe drops first.
+          for c in newlinepath tabpath globpath spacepath dashpath utf8path \
+                   symlink brokenlink linkmixed; do
+            for w in root sub; do
+              grep -qxF "  ok    $c / $w" "$RUNNER_TEMP/pm.log" \
+                || { echo "the parking matrix never passed a case named '$c / $w'"; exit 1; }
+            done
+          done
+          # the two standalone cases, which carry evidence a state name cannot:
+          # that a half-finished park is recoverable, and that :(literal) keeps a
+          # glob-shaped name from reaching a conflicted file
+          for c in "park fails partway" "glob name beside a conflicted file"; do
+            grep -qxF "  ok    $c" "$RUNNER_TEMP/pm.log" \
+              || { echo "the parking matrix never passed the case '$c'"; exit 1; }
+          done
+          # ...and every single fix, rolled back one at a time, must turn it red
           bash tests/parking_rollback.sh
+
+      - name: installer state matrix, driven from the real install.sh
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
           # the installer replaces and deletes directories the user owns, so it
           # gets the same treatment: real script, full tree comparison, fault
           # injection at the swap, and the versions that used to fail must fail
-          bash tests/install_matrix.sh
+          bash tests/install_matrix.sh | tee "$RUNNER_TEMP/im.log"
+          grep -qE '^21 passed, 0 failed, 0 skipped' "$RUNNER_TEMP/im.log" \
+            || { echo "expected 21 installer cases, none skipped"; exit 1; }
           for old in v0.12.0 v0.13.1; do
             git show "$old:install.sh" > "$RUNNER_TEMP/old-$old.sh" 2>/dev/null || continue
             if bash tests/install_matrix.sh "$RUNNER_TEMP/old-$old.sh" >/dev/null 2>&1; then

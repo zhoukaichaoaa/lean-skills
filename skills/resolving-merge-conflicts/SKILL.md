@@ -1,6 +1,7 @@
 ---
 name: resolving-merge-conflicts
-description: EXPERIMENTAL - the in-flight-work rescue has been corrected in eight consecutive releases and its state space is not exhausted. Use when git reports conflicts during a merge, rebase, cherry-pick, revert or pull — before touching any hunk, and before staging anything.
+disable-model-invocation: true
+description: EXPERIMENTAL, user-invoked only - the in-flight-work rescue has needed a correction in nearly every release since 0.12.0 and its state space is not exhausted; it moves your uncommitted work, so you decide when it runs. Use when git reports conflicts during a merge, rebase, cherry-pick, revert or pull — before touching any hunk, and before staging anything.
 ---
 
 # Resolving Merge Conflicts
@@ -101,8 +102,10 @@ Run every command below and **read what it printed**. Two shapes account for eve
 4. **Take the user's staged work out of the index before you resolve anything.** This is what makes the promise in step 8 achievable:
 
    ```bash
-   git restore --staged -- ':(top)<each staged-not-brought path>'   # older git: git reset HEAD -- <paths>
+   git restore --staged -- ':(literal,top)<each staged-not-brought path>'   # older git: git reset HEAD -- ':(literal,top)<path>'
    ```
+
+   **`:(literal,top)`, one path per pathspec.** `top` because status prints paths from the repo root, and a bare path resolves against wherever you happen to be standing. `literal` because status also prints names like `a[1].txt`, and **git matches a pathspec both literally and as a wildcard** — so without it this command unstages `a1.txt` as well, a file the user never named, and exits **0** without a word. The same omission in step 5's `git checkout --` fails the opposite way: if `a1.txt` happens to be one of the conflicted paths, git rejects the *whole* command (`error: path 'a1.txt' is unmerged`) and nothing gets parked at all.
 
    **Only that first list.** An untracked path is not in the index, and passing one makes git reject the *whole* command — the staged files you meant to rescue stay staged and get committed anyway. (A working-tree-only path is harmless to pass, but it has nothing to unstage, so listing it only obscures what you did.)
 
@@ -126,21 +129,44 @@ Run every command below and **read what it printed**. Two shapes account for eve
 
    ```bash
    # lean-skills:park
-   cd "$(git rev-parse --show-toplevel)"
-   G="$(git rev-parse --git-dir)"
-   PARK="$G/lean-parked-$(date +%s)-$$"
-   test ! -e "$PARK"
-   mkdir -p "$PARK/untracked"
-   IFS='
-'
-   git diff --binary -- $(for p in $TRACKED $UNTRACKED; do printf ':(top)%s\n' "$p"; done) > "$PARK/tracked.patch"
-   for p in $TRACKED; do git checkout -- ":(top)$p"; done
-   : > "$PARK/manifest"
-   for p in $UNTRACKED; do
-     mkdir -p "$PARK/untracked/$(dirname "$p")"
-     mv "$p" "$PARK/untracked/$p"
-     printf '%s\0' "$p" >> "$PARK/manifest"     # the record of what was moved
-   done
+   # Every step says what it does on failure: `set -e` is unreliable when a
+   # block is sourced rather than executed, and a model runs these a line at a
+   # time. A silent failure here is how work gets left in the tree and then
+   # overwritten by the operation.
+   set -e
+   die() { echo "park: $1" >&2; exit 1; }
+   cd "$(git rev-parse --show-toplevel)" || die "no worktree"
+   G="$(git rev-parse --git-dir)" || die "no git dir"
+   STATE="$G/lean-parked.state"
+   [ ! -e "$STATE" ] || die "an unfinished parking is still open: $STATE"
+   PARK_NAME="lean-parked-$(date +%s)-$$"
+   PARK="$G/$PARK_NAME"
+   [ ! -e "$PARK" ] || die "name collision: $PARK"
+   mkdir -p -- "$PARK/untracked" || die "cannot create $PARK"
+   # $G/lean-park-input is step 4's list, one NUL-terminated path per entry:
+   #   : > "$G/lean-park-input"
+   #   printf '%s\0' 'each/path/from/step 4' >> "$G/lean-park-input"
+   [ -s "$G/lean-park-input" ] || die "no input list"
+   mv -- "$G/lean-park-input" "$PARK/input" || die "cannot take the input list"
+   : > "$PARK/tracked"; : > "$PARK/untracked.list"; : > "$PARK/manifest"
+   while IFS= read -r -d '' p; do
+     if git ls-files --error-unmatch -z -- ":(literal,top)$p" >/dev/null 2>&1
+     then printf '%s\0' "$p" >> "$PARK/tracked"      || die "cannot record $p"
+     else printf '%s\0' "$p" >> "$PARK/untracked.list" || die "cannot record $p"
+     fi
+   done < "$PARK/input"
+   xargs -0 -a "$PARK/input" -I{} printf ':(literal,top)%s\n' {} > "$PARK/specs" || die "cannot build pathspecs"
+   git diff --binary -- $(tr '\n' ' ' < "$PARK/specs") > "$PARK/tracked.patch" || die "git diff failed"
+   while IFS= read -r -d '' p; do
+     git checkout -- ":(literal,top)$p" || die "cannot restore $p from the index"
+   done < "$PARK/tracked"
+   while IFS= read -r -d '' p; do
+     mkdir -p -- "$PARK/untracked/$(dirname -- "$p")" || die "cannot make a home for $p"
+     mv -- "$p" "$PARK/untracked/$p" || die "cannot park $p (already parked: $(tr -cd '\0' < "$PARK/manifest" | wc -c))"
+     printf '%s\0' "$p" >> "$PARK/manifest" || die "parked $p but could not record it"
+   done < "$PARK/untracked.list"
+   printf '%s\n' "$PARK_NAME" > "$STATE.tmp" || die "cannot write state"
+   mv -- "$STATE.tmp" "$STATE" || die "cannot publish state"
    ```
 
    **`git checkout --` takes tracked paths only, and so does everything else that reads a pathspec.** This is the rule, not the instance: **any git command given a pathspec it does not recognise rejects the whole command** (`error: pathspec ... did not match any file(s) known to git`, exit 1) rather than skipping that one path. It has now bitten `git restore --staged`, `git stash push`, `git checkout --` and `git restore --staged` again on the way back. `git diff` is the one exception — it ignores paths it does not know, which is why the patch line above can name them all.
@@ -153,30 +179,47 @@ Run every command below and **read what it printed**. Two shapes account for eve
 
    ```bash
    # lean-skills:restore
-   cd "$(git rev-parse --show-toplevel)"
-   IFS='
-'
+   set -e
+   die() { echo "restore: $1" >&2; exit 1; }
+   cd "$(git rev-parse --show-toplevel)" || die "no worktree"
+   G="$(git rev-parse --git-dir)" || die "no git dir"   # recomputed: nothing is inherited
+   STATE="$G/lean-parked.state"
+   [ -s "$STATE" ] || die "no parking is open"
+   PARK_NAME="$(cat -- "$STATE")" || die "cannot read state"
+   case "$PARK_NAME" in
+     lean-parked-*) ;;
+     *) die "state does not name a parking area: $PARK_NAME" ;;
+   esac
+   case "$PARK_NAME" in
+     */*|*..*) die "state names a path, not a basename" ;;
+   esac
+   PARK="$G/$PARK_NAME"
+   [ -d "$PARK" ] || die "state points at $PARK, which is not there"
+   HELD=0
    if [ -s "$PARK/tracked.patch" ]; then
-     git apply --3way "$PARK/tracked.patch" || APPLY_CONFLICT=1
-     STAGED=$(git -c core.quotePath=false diff --cached --name-only)
-     for p in $STAGED; do git restore --staged -- ":(top)$p"; done
+     git apply --3way "$PARK/tracked.patch" || HELD=1
+     # only the paths we parked: `git diff --cached` lists the whole index, and
+     # unstaging all of it would tear down whatever the user or the operation
+     # had staged for reasons of their own
+     while IFS= read -r -d '' p; do
+       git restore --staged -- ":(literal,top)$p" || die "cannot unstage $p"
+     done < "$PARK/tracked"
    fi
-   CLASH=0
    while IFS= read -r -d '' p; do
-     if [ -e "$p" ] || [ -L "$p" ]; then CLASH=1; continue; fi
-     mkdir -p "$(dirname "$p")"
-     mv "$PARK/untracked/$p" "$p"
+     if [ -e "$p" ] || [ -L "$p" ]; then HELD=1; continue; fi
+     mkdir -p -- "$(dirname -- "$p")" || die "cannot make a home for $p"
+     mv -- "$PARK/untracked/$p" "$p" || die "cannot put $p back"
    done < "$PARK/manifest"
-   LEFT=$(find "$PARK/untracked" -mindepth 1 ! -type d -print -quit)
-   if [ "$CLASH" -eq 0 ] && [ -z "${APPLY_CONFLICT:-}" ] && [ -z "$LEFT" ]; then
-     rm -rf "$PARK"
+   LEFT="$(find "$PARK/untracked" -mindepth 1 ! -type d -print -quit)"
+   if [ "$HELD" -eq 0 ] && [ -z "$LEFT" ]; then
+     rm -f -- "$STATE" && rm -rf -- "$PARK"
    else
-     echo "kept $PARK - tell the user what is still in it"
+     echo "kept $PARK - tell the user what is in it; $STATE still points at it"
    fi
    ```
 
    - **The patch is empty** — the user had only untracked work, which is a perfectly ordinary case. Do not run `git apply` on it: an empty patch exits **128** with `No valid patches in input`, and reading that as the next case reports a conflict that does not exist. Go straight to the untracked files.
-   - **`git apply` exit 0** — the tracked work went back. Unstage exactly what the previous command printed, and nothing else: naming the untracked paths here is the same trap again, and it would leave a staged deletion the next commit sweeps up.
+   - **`git apply` exit 0** — the tracked work went back. Unstage exactly the paths recorded in `$PARK/tracked` when you parked, and nothing else. Not `git diff --cached`: that lists the *whole* index, so unstaging all of it tears down whatever the user or the operation had staged for their own reasons. And not the untracked paths either — that is the pathspec trap again, and it would leave a staged deletion the next commit sweeps up.
    - **Non-zero on a non-empty patch** — the operation changed one of these paths too, and `--3way` has written conflict markers rather than choosing for you. That is the honest answer, and the reason this is not a `cp`: a copy would have silently overwritten the operation's version. **Keep the patch**, name it to the user, and resolve those hunks with them.
 
    Then move them back **from the record written while parking**, one refusal per occupied path.

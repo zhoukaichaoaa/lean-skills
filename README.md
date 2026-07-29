@@ -2,7 +2,7 @@
 
 [![ci](https://github.com/zhoukaichaoaa/lean-skills/actions/workflows/ci.yml/badge.svg)](https://github.com/zhoukaichaoaa/lean-skills/actions/workflows/ci.yml)
 
-> 9 个技能。5 个常驻，4 个手动。没有强制条款，没有启动注入。
+> 9 个技能。4 个常驻，5 个手动。没有强制条款，没有启动注入。
 >
 > A lean, context-budgeted skill set for Claude Code — distilled from mattpocock/skills and obra/superpowers. Docs in Chinese, skills in English.
 
@@ -28,7 +28,6 @@
 | `receiving-code-review` | 评审说啥都点头照做 | superpowers，重写 |
 | `diagnosing-bugs` | 硬 bug 不建复现回路就开猜；同一个 bug 连修两刀 | mattpocock，扩写 |
 | `spec-review` | 只查代码规范、不查"当初要的是什么" | mattpocock，收窄为单轴 |
-| `resolving-merge-conflicts` **(experimental)** | 冲突了就 `--abort`、随便选一边、或 `git add -A` 把你的 WIP 卷进合并提交 | mattpocock，骨架 + 重写 |
 
 **手动（description 不进上下文；正文在你调用时才加载）**
 
@@ -38,6 +37,7 @@
 | `implement` | 编排：读计划 → 隔离 → 测试先行 → 验证 → 评审 → 交付 | mattpocock，重写 |
 | `tdd` | 测试先行的完整参考（接缝 / 反模式 / 循环规则） | mattpocock，原文 |
 | `worktree` | 开隔离工作区的完整流程 | superpowers，精简 |
+| `resolving-merge-conflicts` **(experimental)** | 冲突了就 `--abort`、随便选一边、或 `git add -A` 把你的 WIP 卷进合并提交 | mattpocock，骨架 + 重写 |
 
 常驻/手动的区分用的是 Claude Code 官方字段 `disable-model-invocation`（[文档](https://code.claude.com/docs/en/skills#control-who-invokes-a-skill)）。官方语义：设为 `true` 时 **description 不进上下文、模型无法调用**，只能由你 `/名字` 触发。
 
@@ -124,7 +124,9 @@ cd lean-skills
 | 一个模块、几个文件 | `/grill-me` → `/implement` |
 | 新系统 / 跨模块重构 | `/grill-me` → `/worktree` → `/implement` → 完事后 `git worktree remove` |
 
-常驻的 5 个不需要你操心 —— 它们会在该出现的时候自己出现（评审反馈到来时 `receiving-code-review` 自动接手；`git pull` 撞上冲突时 `resolving-merge-conflicts` 自动接手）。
+常驻的 4 个不需要你操心 —— 它们会在该出现的时候自己出现（评审反馈到来时 `receiving-code-review` 自动接手；正要说"修好了"时 `verification-before-completion` 自动接手）。
+
+`resolving-merge-conflicts` 自 0.17.0 起改为**手动**：它会动你未提交的工作，这种事不该由模型读一段 description 自行决定。撞上冲突时自己敲 `/resolving-merge-conflicts`。
 
 **装完先做个冒烟测试**：新开一个会话，敲 `/`，**九个技能应当全部出现**。`disable-model-invocation` 只阻止模型自动调用，[不隐藏斜杠菜单](https://code.claude.com/docs/en/skills#control-who-invokes-a-skill)——想让某个技能从菜单消失，得另加 `user-invocable: false`。看不到就是没装上或没重启会话。
 
@@ -198,8 +200,9 @@ cd lean-skills
 4. **更新 NOTICE 的逐文件行**，并重算词数。口径是 **`awk '{n+=NF}END{print n}' <file>`** —— 不用 `wc -w`，它的结果随 locale 和 GNU/BSD 实现而变（同一份文件 851 vs 877），写进文档就无法复核。CI 会重算每个箭头的**右侧**（本仓库这一端）并比对；左侧的上游数字要自己按顶部钉住的那两个提交复核。
 5. 更新 CHANGELOG。
 6. **本地把 CI 的每条腿在干净克隆上原样跑一遍。** 这一步已经抓到过四个只在 CI 里才会暴露的 bug。
-7. **跑 `python tests/mutations.py`** —— 它会逐条把 CI 声称保护的东西故意改坏，确认对应的 step 真的会红；新增断言时同步加一个 case。涉及“失败时会怎样”的断言要用**故障注入**（PATH 上垫一个假 `mv`、或用 PowerShell 函数遮蔽 `Move-Item`），并**先确认它在旧代码上是红的**—— 否则测的是空气（写 shim 时 `PATH` 里不能放 `C:/...` 这种带冒号的路径，Git Bash 会把它拆坏，shim 永远找不到）。旧的措辞：**对新增的断言做变异测试** —— 故意把被测的东西改坏，确认它真的会红。哑弹断言在这个仓库出现过不止一次（`-notmatch 'THEIRS'` 因大小写不敏感而永不触发）。
+7. **跑 `python tests/mutations.py`** —— 它会逐条把 CI 声称保护的东西故意改坏，确认对应的 step 真的会红；新增断言时同步加一个 case。**先看基线那几行**：它会在变异之前把每条 leg 原样跑一遍，任何一条基线是红的，这条 leg 上的所有"抓到"都是白捡的（0.17.0 发现五条里有三条如此）。同理，跳过的用例单独计数，永远不折进"抓到"。涉及“失败时会怎样”的断言要用**故障注入**（PATH 上垫一个假 `mv`、或用 PowerShell 函数遮蔽 `Move-Item`），并**先确认它在旧代码上是红的**—— 否则测的是空气（写 shim 时 `PATH` 里不能放 `C:/...` 这种带冒号的路径，Git Bash 会把它拆坏，shim 永远找不到）。旧的措辞：**对新增的断言做变异测试** —— 故意把被测的东西改坏，确认它真的会红。哑弹断言在这个仓库出现过不止一次（`-notmatch 'THEIRS'` 因大小写不敏感而永不触发）。
 8. commit & push → 三平台 CI 绿 → `git tag vX.Y.Z && git push --tags` → `gh release create` → 核对 GitHub 上的描述 → `claude plugin validate --strict .claude-plugin/plugin.json` 与 `--strict .claude-plugin/marketplace.json`（CI 跑的就是这两条）
+9. **发布说明里不要写 codeload 压缩包的 SHA-256。** 那些包 GitHub 实时生成，字节不保证稳定，读者核不出来。要给校验值就给 tag/commit/tree 的 git 对象哈希。签名公钥、验证方法，以及这些签名**能证明什么、不能证明什么**，见 [SIGNING.md](SIGNING.md)。
 
 ## 归属
 

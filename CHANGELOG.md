@@ -1,5 +1,97 @@
 # Changelog
 
+## 0.17.0 — 2026-07-29
+
+针对 v0.16.0 的第三方审计。**两条阻断级生产故障，都成立，都打在 0.16.0 刚写进技能的停靠配方上**；顺着根因往下查，我自己又补出三条。外加一批测试可信度问题 —— 其中最难看的一条是：**上一版的停靠矩阵在同一个 shell 里 source 两个配方块，所以那两条生产故障对它完全不可见。**
+
+以下 1、2 是审计报的，3、4、5 是复现过程中自己查出来的。
+
+### 生产故障
+
+**1. `$PARK` 跨不过进程边界**
+
+停靠与恢复是两条独立的 Bash 工具调用，也就是两个进程。配方把停靠区路径存在 shell 变量 `$PARK` 里，恢复那步读到的是空串。实测：`restore_rc=0`，用户文件**不在**工作区，停靠区仍在磁盘上 —— 恢复报告成功而什么都没恢复。加 `set -u` 后直接 `PARK: unbound variable`。
+
+改为**状态落盘**：停靠把目录名写进 `$(git rev-parse --git-dir)/lean-parked.state`，恢复自己重算 git-dir 再读回，且校验读到的是 `lean-parked-*` 形状的**纯基名**（含 `/` 或 `..` 一律拒绝）。恢复不再继承任何东西。
+
+**2. 名字以 `-` 开头的文件让停靠静默失效**
+
+`dirname "$p"` 与 `mv "$p" ...` 遇到 `-draft.txt` 会把它当选项解析。实测停靠返回 0、什么都没停靠，紧接着的 rebase 就卡住。所有 `dirname`/`mv` 补上 `--` 终止符。
+
+**3. `set -e` 在被 source 时不作数**
+
+上面两条能长期潜伏，根因在这里。实测同一个脚本：`bash park.sh` → rc=1，`( . park.sh )` → rc=0。配方原本只靠 `set -e` 兜底。现在每一步都带显式 `|| die "..."`，失败点自己说自己是谁。
+
+**4. 技能降级为用户显式调用**
+
+`resolving-merge-conflicts` 加上 `disable-model-invocation: true`。它驱动一套会动用户未提交工作的破坏性流程，不该由模型读一段 description 自行决定要不要用。常驻技能因此从 5 个减到 4 个，两份 manifest 的描述、安装器横幅、CI 的常驻集断言同步更新。
+
+**5. 一处遗漏的 `:(top)`**
+
+第 4 步那条 `git restore --staged` 只写了 `:(top)`，没写 `literal`。status 会打印 `a[1].txt` 这类名字，而 git 的 pathspec **既按字面匹配也按通配匹配**，实测：
+
+```
+git restore --staged -- ':(top)a[1].txt'   ->  rc=0，a1.txt 和 a[1].txt 一起被取消暂存
+```
+
+用户点名的那个确实处理了，但**没点名的 `a1.txt` 也被一起动了，退出码 0，一声不吭**。已改为 `:(literal,top)`，CI 的断言也从"必须有 `:(top)`"收紧为"必须有 `:(literal,top)`"。
+
+### 测试可信度
+
+**矩阵曾在同一个 shell 里跑完整个往返**，所以两个配方块之间的所有状态传递都"能用"。现在停靠、`rebase --continue`、恢复分在**三段互不传递状态**的执行里：停靠在子 shell 里 source（这比生产更严苛 —— `set -e` 在被 source 时不作数，配方必须靠自己的 `|| die` 站住），恢复则用 `env -u PARK -u PARK_NAME -u G -u STATE bash restore.sh` 独立启动，继承的可能性被显式掐掉。仅此一项改动就让上面第 1 条立刻变红。停靠矩阵 40 例，0 跳过。
+
+**补回一条被错误放弃的回滚用例，而且是第二次才补对**。上一版在逐条回滚里写着"`:(literal)` 在本平台没有诚实的用例"，理由是 `b*c.txt` 这种名字 NTFS 存不了。那个理由**过度推广了** —— 站不住的只有星号，`a[1].txt` 各平台都合法。
+
+但我第一次补的用例**自己没通过审**：回滚跑完是 `SURVIVED`。原因是诱饵 `a1.txt` 当时是死的。想清楚才发现条件很窄 —— 第 4 步的清单只排除两类路径：**只暂存了的**（工作区和索引已经一致，glob 扫到也不改变什么）和**冲突中的**。所以 `literal` 唯一能起作用的场合，是一个**冲突中的文件**的名字被某个停靠路径当 glob 匹配到。实测（a1.txt 未解决，a[1].txt 带用户改动）：
+
+```
+git checkout -- ':(literal,top)a[1].txt'   ->  rc=0，a1.txt 仍是三个 stage
+git checkout -- ':(top)a[1].txt'           ->  error: path 'a1.txt' is unmerged, rc=1
+```
+
+**所以它是 pathspec 陷阱的又一次**：不是悄悄改错文件，而是整条命令被拒，停靠当场停住，用户的改动既没停靠也没安全。用例改为按这个形状单独构造（不走共用状态机，不影响其余用例），逐条回滚 6 → 7 项，停靠矩阵 39 → 40 例。
+
+**变异套件此前没有基线**，而这是本轮最严重的一处自欺。"变异被抓"这个推断，只有在**未变异时该 leg 是绿的**才成立。加上基线检查后，当时五条 leg 里**有三条在未变异时就是红的**：
+
+- `meta` leg 在本机**一直是 rc=127**。harness 把 `sys.executable` 直接写进 bash 脚本，Windows 路径的反斜杠被 shell 吃掉，`F:\python\python.exe` 变成命令 `F:pythonpython.exe`，命令不存在。
+- `rec` leg 是 rc=1，因为 CI 里还断言着重写前的 `git checkout -- ":(top)$p"`。
+- `sh` leg 是 rc=1，因为 Git Bash 建不出那个断裂链接。
+
+也就是说上一版"36/36 全抓"里，**大部分是白捡的** —— leg 本来就是红的，变不变异都红。三条全部修好、基线全绿之后重跑，立刻掉出两个真正的幸存者：
+
+- **`installer: rollback only restores directories` 幸存**。这正是 0.13.2 那个丢数据的 bug（回滚用 `-d` 判定，`--adopt` 接管的普通文件和断裂链接因此跳过回滚，随后被 `rm -rf` 删掉）。原因是它被挂在 CI 的 `install.sh` leg 上，而那条 leg 的故障注入**只用目录当占位者**，看不见这个向量。已改挂到 `install_matrix.sh` 那条 leg（它会逐个用 dir/file/link/broken 当占位者），改挂后立刻被抓。为此把 CI 里"停靠与安装器矩阵"一步拆成两步，故障归属也更清楚。
+- **`installer: drive letters absolute everywhere again` 幸存**，但这条**不是测试的问题**：该变异把 `MINGW*|MSYS*|CYGWIN*)` 扩成 `|*)`，而本机 `uname -s` 就是 `MINGW64_NT-*`，第一个分支本来就匹配 —— 这个向量在 Windows 上**按构造不可能被杀死**。把它记成"抓到"是往好听方向撒谎，记成"幸存"又是往难听方向。新增 `@posix` 平台限定，本机报**跳过并说明原因**，留给 Linux/macOS 的 CI 去杀。
+
+另外 `NO_SYMLINKS` 那段"Git Bash 不支持符号链接所以本地删掉这几行"是**删掉了覆盖而不是删掉障碍** —— 实测 `MSYS=winsymlinks:nativestrict` 下 Git Bash 能建真链接，整条 leg 不删任何行也是绿的。改为设环境变量，本地跑的和 CI 跑的是同一份脚本。
+
+**跳过不再折进通过数**。两套安装器矩阵与变异套件现在都分开报告 passed/failed/skipped。此前 POSIX 矩阵只打印 "N passed, M failed"，跳过的用例混在里面看不出来。CI 断言 Linux/macOS 上停靠矩阵必须 `40 passed, 0 failed, 0 skipped`（这两个平台能存 newline 和 tab，也能建链接，跳过只可能意味着探针坏了），安装器矩阵必须 `21 passed, 0 failed, 0 skipped`。**光有总数还不够** —— 数目对得上而某个用例悄悄变成另一个简单用例的副本，是同一类骗局；所以另加一条按名字点名的断言：`newlinepath`/`tabpath`/`globpath`/`spacepath`/`dashpath`/`utf8path`/`symlink`/`brokenlink`/`linkmixed` 各自的 `/ root` 与 `/ sub` 共 18 行必须逐行出现在输出里。
+
+顺带删掉一个用不上的探针：矩阵里曾有个 `b*c.txt` 的诱饵和一个探测它能否落盘的 `STAR_OK`，而 NTFS 根本存不了 `*`（MSYS 会替换成私用区字符，于是 shell 写下的名字和磁盘上的字节对不上，git 永远找不到那个文件），于是那组用例在 Windows 上只能跳过。`b*c.txt` 与探针一并删掉；`literal` 的行为证据由上面那个冲突诱饵用例承担，它三个平台都能跑。
+
+**PowerShell 走双解释器**。Windows PowerShell 5.1 与 pwsh 7 在原生命令重定向、`-LiteralPath`、以及断裂链接下 `Test-Path` 的回答上都不同，安装器对两者的用户都发货。CI 现在对 `powershell` 和 `pwsh` 各跑一遍矩阵（各断言 `28 passed, 0 failed, 0 skipped`），并各自要求 v0.12.0 仍然失败。
+
+**PowerShell 的符号链接探针一直在静默跳过 7 个用例**。探针用"指向一个不存在的目标"建链接来试探能力，而 5.1 恰恰**拒绝**创建指向不存在目标的链接 —— 于是在符号链接完全可用的机器上，探针也报告"不支持"。修正为先建目标再建链接。7 个用例真正跑起来之后全绿，另加一个 junction 占位者用例（Windows 上常见，且不需要符号链接权限）。
+
+### 更正：0.13.3 关于 `Test-Path` 的说法是错的
+
+0.13.3 写道 `Test-Path` "同样回答的是链接目标是否存在，断裂链接返回 False"，并据此给 `install.ps1` 加了 `Test-Exists`。
+
+**实测（Windows PowerShell 5.1.19041.6456）：对断裂的符号链接，`Test-Path` 与 `Test-Path -LiteralPath` 都返回 `True`。** 那句话不成立，因此那次改动的**理由是错的**。
+
+修好探针、让 7 个符号链接用例真正执行之后，**v0.13.2（即加 `Test-Exists` 之前的版本）在矩阵上是 28/28 全过**。也就是说 `Test-Exists` 没有修好任何可观测的行为差异。
+
+保留它，不回滚，理由只有一条且不再夸大：它比 `Test-Path` 少依赖一层对链接语义的假设。但它**不是**一次 bug 修复，0.13.3 把它记成 bug 修复是错的。pwsh 7 的行为本机无法验证（未安装），已交给 CI 的 pwsh leg 去测。
+
+### 交付说明
+
+新增 [`SIGNING.md`](SIGNING.md)：公钥、`allowed_signers` 用法，以及**签名能证明什么、不能证明什么** —— 这把密钥只登记为仓库级 deploy key，没有登记为账号级 signing key，所以 GitHub 不显示 Verified、API 也查不到它，"密钥属于谁"目前只有仓库内的声明这一个来源。要取得可独立核验的身份绑定需要仓库所有者在账号设置里额外登记同一把公钥为 Signing Key。
+
+**不再公布 codeload 压缩包的 SHA-256。** 那些包由 GitHub 实时生成，字节不保证稳定，第三方核不出来。改为公布 tag/commit/tree 三个 git 对象哈希，并给出一条参数写全的 `git archive`（含 `gzip -n`）供需要固定归档的人自行复现。
+
+**验证**（本机 Windows 10 + Git Bash，`MSYS=winsymlinks:nativestrict`）：停靠矩阵 **40 passed / 0 failed / 0 skipped**，且 18 个难名字用例逐行点名核对；POSIX 安装器矩阵 **21 / 0 / 0**；PowerShell 5.1 安装器矩阵 **28 / 0 / 0**，v0.12.0 在同一矩阵上仍然 4 项失败（判别力还在）；逐条回滚 **7 项全部被抓**，且七条的失败签名互不相同（3/37、3/37、38/2、38/2、39/1、39/1、38/2），说明它们测的是不同的东西而不是同一条断言的七个副本；变异套件 **6 条 leg 基线全 rc=0**，36 例中 **35/35 抓到、1 例按平台跳过并写明原因**。
+
+**本机没验到的**：pwsh 7（未安装）—— 双解释器那条腿只在 CI 上跑；Linux/macOS 的所有断言同理。这两句是限度声明，不是免责声明：CI 红了就是没过。
+
 ## 0.16.0 — 2026-07-29
 
 自审，专打上一版交付的两套矩阵本身。**三条，都是我自己写的盲区。**
@@ -215,6 +307,8 @@ error: pathspec 'sub/new.txt' did not match any file(s) known to git   exit=1
 0.13.1 把 `[ -e ]` 改成 `exists()`（`-e` 或 `-L`）—— **只改了 `install.sh`**。`install.ps1` 仍在用 `Test-Path`，而它同样回答的是链接**目标**是否存在，断裂链接返回 False。同一个 bug 在 Windows 侧原封不动地留了一版 —— 直接违反了“改动要双平台都做”这条规则。新增 `Test-Exists`（先 `Test-Path`，不行则查父目录的条目），6 处 `$target` 判定与回滚全部改用它。CI 新增一条：`install.ps1` 里不得再用 `Test-Path` 决定用户的东西。
 
 **本机无法验证**：Windows 上创建断裂符号链接需要管理员或开发者模式，本机造不出。`Test-Exists` 的正确性靠代码路径与 CI；上面那条文本断言至少保证它不会静默退回。
+
+> **0.17.0 更正**：上面这一整段的前提是错的。实测 5.1 对断裂链接 `Test-Path` 返回 **True**，不是 False；探针修好后 v0.13.2 在矩阵上 28/28 全过，`Test-Exists` 没有修好任何可观测差异。详见 0.17.0 那一节。
 
 **验证**：CI 的 9 条 run-step 里 8 条在干净克隆上实跑（含 Windows）；`tests/mutations.py` 36/36。
 

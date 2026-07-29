@@ -330,5 +330,5 @@ fi
 echo "Remove later with --uninstall."
 echo
 echo "Resident (model-invoked): verification-before-completion, receiving-code-review,"
-echo "                          diagnosing-bugs, spec-review, resolving-merge-conflicts"
-echo "Manual (user-invoked):    grill-me, implement, tdd, worktree"
+echo "                          diagnosing-bugs, spec-review"
+echo "Manual (user-invoked):    grill-me, implement, resolving-merge-conflicts, tdd, worktree"

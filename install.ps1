@@ -295,7 +295,7 @@ if ($createdLevels.Count -gt 0) {
 Write-Host "Remove later with -Uninstall."
 Write-Host ""
 Write-Host "Resident (model-invoked): verification-before-completion, receiving-code-review,"
-Write-Host "                          diagnosing-bugs, spec-review, resolving-merge-conflicts"
-Write-Host "Manual (user-invoked):    grill-me, implement, tdd, worktree"
+Write-Host "                          diagnosing-bugs, spec-review"
+Write-Host "Manual (user-invoked):    grill-me, implement, resolving-merge-conflicts, tdd, worktree"
 
 } finally { Remove-Scratch }

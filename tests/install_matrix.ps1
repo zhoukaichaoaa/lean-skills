@@ -28,12 +28,16 @@ Copy-Item -Recurse .\skills (Join-Path $Src 'skills')
 Copy-Item $Installer (Join-Path $Src 'install.ps1')
 
 # Symlinks need Developer Mode or an elevated shell; skip loudly if unavailable.
+# The target has to exist first: Windows PowerShell 5.1 refuses to create a link
+# to a missing path, so probing with a dangling target reports "no symlinks"
+# even where they work perfectly, and every symlink case is skipped in silence.
 $Symlinks = $false
 try {
   $probe = Join-Path $W 'probe'
   New-Item -ItemType Directory -Force $probe | Out-Null
+  [IO.File]::WriteAllText((Join-Path $probe 'x'), 'x')
   New-Item -ItemType SymbolicLink -Path (Join-Path $probe 'l') -Target (Join-Path $probe 'x') -ErrorAction Stop | Out-Null
-  $Symlinks = $true
+  $Symlinks = (Get-Item -LiteralPath (Join-Path $probe 'l') -Force).LinkType -eq 'SymbolicLink'
 } catch { $Symlinks = $false }
 
 $script:pass = 0; $script:fail = 0
@@ -70,9 +74,16 @@ function MakeOccupant($target, $kind, $spare) {
                [IO.File]::WriteAllText((Join-Path $target 'SKILL.md'), "OLD`n")
                [IO.File]::WriteAllText((Join-Path $target '.lean-skills'), "$MarkerLine`r`n") }
     'file'   { [IO.File]::WriteAllText($target, "USERS FILE`n") }
+    'junction' { $real = Join-Path (Split-Path $target) 'junction-target'
+                 New-Item -ItemType Directory -Force $real | Out-Null
+                 [IO.File]::WriteAllText((Join-Path $real 'inside.txt'), "outside`n")
+                 & cmd /c mklink /J "$target" "$real" | Out-Null }
     'link'   { [IO.File]::WriteAllText($spare, "elsewhere`n")
                New-Item -ItemType SymbolicLink -Path $target -Target $spare | Out-Null }
-    'broken' { New-Item -ItemType SymbolicLink -Path $target -Target (Join-Path (Split-Path $target) 'nowhere-at-all') | Out-Null }
+    'broken' { $tmp = Join-Path (Split-Path $target) 'soon-gone'
+               [IO.File]::WriteAllText($tmp, "x`n")
+               New-Item -ItemType SymbolicLink -Path $target -Target $tmp | Out-Null
+               Remove-Item -LiteralPath $tmp -Force }
   }
 }
 
@@ -117,7 +128,7 @@ Write-Host "installer under test: $Installer"
 
 Case 'fresh install' 'none' @('-Yes') 0 'replace'
 
-$occupants = @('dir', 'file')
+$occupants = @('dir', 'file', 'junction')
 if ($Symlinks) { $occupants += @('link', 'broken') }
 foreach ($o in $occupants) {
   Case "occupied by $o, default" $o @('-Yes') 3 'keep'
@@ -218,7 +229,17 @@ RefusalCase 'unknown option refused'       (Join-Path $W 'ok-target')      @('-B
 RefusalCase 'uninstall on a missing target' (Join-Path $W 'never-created') @('-Uninstall') 0
 
 Write-Host ''
-if (-not $Symlinks) { Write-Host '  (symlink cases skipped: this shell cannot create links)' }
-Write-Host "$script:pass passed, $script:fail failed"
+# Derived, not hard-coded: a hand-written skip count silently stops matching the
+# cases the moment one is added or removed, and then the totals no longer add up
+# -- which is exactly the failure this whole release is about.
+#   link + broken as occupants: 2 each (default, -Adopt)
+#   broken as the uninstall occupant:  1
+#   broken as an injection occupant:   2 (swap-in, move-aside)
+$skipped = 0
+if (-not $Symlinks) {
+  $skipped = (2 * 2) + 1 + 2
+  Write-Host "  skip  $skipped symlink case(s): this shell cannot create links"
+}
+Write-Host "$script:pass passed, $script:fail failed, $skipped skipped"
 Remove-Item -Recurse -Force $W -ErrorAction SilentlyContinue
 if ($script:fail -ne 0) { exit 1 }

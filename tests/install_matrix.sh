@@ -23,9 +23,14 @@ SRCROOT=$W/src; mkdir -p "$SRCROOT"
 cp -R skills "$SRCROOT/"; cp "$INSTALLER" "$SRCROOT/install.sh"; chmod +x "$SRCROOT/install.sh"
 MARKER='installed by lean-skills; uninstall removes only directories carrying this file'
 
-pass=0; fail=0
+pass=0; fail=0; skip=0
 report() { if [ "$2" -eq 0 ]; then pass=$((pass+1)); printf '  ok    %s\n' "$1"
            else fail=$((fail+1)); printf '  FAIL  %s\n        %s\n' "$1" "$3"; fi; }
+# A case that does not run must say so on its own line and be counted apart.
+# Folded into a total, a skip is indistinguishable from a pass -- which is how
+# seven symlink cases sat silently unexecuted in the PowerShell matrix.
+skipped() { skip=$((skip+1)); printf '  skip  %s\n' "$1"; }
+needs_links() { [ "$SYMLINKS" -eq 1 ] || { skipped "$1 (this platform makes copies, not links)"; return 1; }; }
 
 tree_of() {   # type + content/target + mode of everything under $1
   find "$1" -mindepth 1 | LC_ALL=C sort | while IFS= read -r e; do
@@ -85,7 +90,8 @@ echo "installer under test: $INSTALLER"
 case_run "fresh install"                 none  "-y"          0 replace
 
 # ---- an occupant we did not install: kept by default, adopted on request
-for occ in dir file $( [ "$SYMLINKS" -eq 1 ] && echo link broken ); do
+for occ in dir file link broken; do
+  case $occ in link|broken) needs_links "occupied by $occ" || continue ;; esac
   case_run "occupied by $occ, default"   "$occ" "-y"         3 keep
   case_run "occupied by $occ, --adopt"   "$occ" "-y --adopt" 0 replace
 done
@@ -121,7 +127,8 @@ uninstall_case() {   # $1 label  $2 occupant  $3 args  $4 rc  $5 expect
 uninstall_case "uninstall ours"                 ours   ""        0 gone
 uninstall_case "uninstall keeps a user dir"     dir    ""        3 keep
 uninstall_case "uninstall keeps a user file"    file   ""        3 keep
-[ "$SYMLINKS" -eq 1 ] && uninstall_case "uninstall keeps a broken link" broken "" 3 keep
+needs_links "uninstall keeps a broken link" \
+  && uninstall_case "uninstall keeps a broken link" broken "" 3 keep
 uninstall_case "uninstall --adopt takes a dir"  dir    "--adopt" 0 gone
 
 # ---- fault injection at each stage of the swap --------------------------
@@ -156,13 +163,13 @@ inject_case() {   # $1 label  $2 occupant  $3 which mv fails
   ) 2>"$W/err"; rc=$?
   report "$label" "$rc" "$(head -3 "$W/err" | tr '\n' ' ')"
 }
-for occ in dir file $( [ "$SYMLINKS" -eq 1 ] && echo broken ); do
+for occ in dir file broken; do
+  case $occ in broken) needs_links "swap over a $occ" || continue ;; esac
   inject_case "swap-in fails over a $occ" "$occ" inplace
   # the other half of the window: moving the old target aside is what fails
   inject_case "move-aside fails over a $occ" "$occ" aside
 done
 
 echo
-[ "$SYMLINKS" -eq 1 ] || echo "  (symlink cases skipped: this platform makes copies)"
-echo "$pass passed, $fail failed"
+echo "$pass passed, $fail failed, $skip skipped"
 [ "$fail" -eq 0 ]

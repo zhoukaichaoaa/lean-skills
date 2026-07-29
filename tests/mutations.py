@@ -28,9 +28,28 @@ LEGS = {
     'manifests and frontmatter': 'meta',
     'git recipes in the skills actually run': 'rec',
     'platform parity': 'par',
+    'parking recipes, driven from SKILL.md itself': 'park',
+    'installer state matrix, driven from the real install.sh': 'imtx',
 }
-# Git Bash cannot make real symlinks, so those vectors are dropped locally.
-NO_SYMLINKS = ('link-root', 'link-src', 'link-chain')
+
+# Some vectors cannot exist on some platforms, and calling those "caught" is a
+# lie in the flattering direction. A leg may carry an @suffix naming what it
+# needs; the suffix is stripped before the CI step is looked up.
+#   @posix  the vector only exists where a drive letter is NOT absolute, so it
+#           is unkillable under MSYS/Cygwin no matter how good the test is
+def unavailable(leg):
+    if leg == 'win' and os.name != 'nt':
+        return 'needs Windows'
+    if leg.endswith('@posix'):
+        u = subprocess.run(['uname', '-s'], capture_output=True).stdout.decode('ascii', 'replace')
+        if u.startswith(('MINGW', 'MSYS', 'CYGWIN')):
+            return 'needs a platform where drive letters are relative; this is %s' % u.strip()
+    return None
+# Git Bash makes copies for `ln -s` unless told otherwise, and this leg's guard
+# vectors are all symlinks. Dropping those lines locally -- which is what this
+# used to do -- silently removed the coverage instead of the obstacle; asking
+# MSYS for real links keeps the local run the same script CI runs.
+MSYS_LINKS = 'winsymlinks:nativestrict'
 
 import json
 VERSION = json.load(io.open(os.path.join(REPO, '.claude-plugin/plugin.json'),
@@ -49,12 +68,17 @@ def fresh(n):
 def run_leg(leg):
     steps = yaml.safe_load(io.open(os.path.join(work, CI), encoding='utf-8'))['jobs']['install']['steps']
     for s in steps:
-        if LEGS.get(s.get('name')) != leg:
+        if LEGS.get(s.get('name')) != leg.split('@')[0]:
             continue
-        body = s['run'].replace('python3 - ', sys.executable + ' - ')
+        # The interpreter goes into a *bash* script, so a Windows path has to be
+        # POSIX-ified and quoted first: written raw, bash eats the backslashes and
+        # F:\python\python.exe becomes the command `F:pythonpython.exe`, which is
+        # not found -- rc=127, every mutation on this leg "caught" for free.
+        py = "'" + sys.executable.replace('\\', '/') + "'"
+        body = s['run'].replace('python3 - ', py + ' - ')
         rt = os.path.join(work, '_rt')
         os.makedirs(rt, exist_ok=True)
-        env = dict(os.environ, RUNNER_TEMP=rt)
+        env = dict(os.environ, RUNNER_TEMP=rt, MSYS=MSYS_LINKS)
         env.pop('CLAUDE_SKILLS_DIR', None)
         if leg == 'win':
             path = os.path.join(work, '_leg.ps1')
@@ -62,9 +86,6 @@ def run_leg(leg):
             return subprocess.run(
                 ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path],
                 cwd=work, env=env, capture_output=True, timeout=900).returncode
-        if leg == 'sh' and os.name == 'nt':
-            body = '\n'.join(l for l in body.splitlines()
-                             if not any(v in l for v in NO_SYMLINKS))
         path = os.path.join(work, '_leg.sh')
         io.open(path, 'w', encoding='utf-8', newline='\n').write(body)
         return subprocess.run(['bash', path], cwd=work, env=env,
@@ -193,7 +214,11 @@ CASES = [
         'install.sh', SPLIT_GOOD, SPLIT_BAD)),
     ('manifest: the marketplace pin goes stale', 'meta', lambda: edit(
         '.claude-plugin/marketplace.json', '"ref": "v', '"ref": "vX')),
-    ('installer: rollback only restores directories', 'sh', lambda: edit(
+    # the 0.13.2 data-loss bug: --adopt can take over a plain file or a broken
+    # link, and a rollback gated on -d skips those, after which rm -rf deletes
+    # them. The CI leg's fault injection only ever occupies with a directory, so
+    # it cannot see this; install_matrix.sh occupies with each in turn.
+    ('installer: rollback only restores directories', 'imtx', lambda: edit(
         'install.sh', 'exists "$_outgoing" && ! exists "$swap_target"',
         '[ -d "$_outgoing" ] && ! exists "$swap_target"')),
     ('skill: step 3 back to --name-only, losing renames', 'rec', lambda: edit(
@@ -208,7 +233,7 @@ CASES = [
     ('installer: -e again instead of symlink-aware exists', 'sh', lambda: edit(
         'install.sh', 'exists() { [ -e "$1" ] || [ -L "$1" ]; }',
         'exists() { [ -e "$1" ]; }')),
-    ('installer: drive letters absolute everywhere again', 'sh', lambda: edit(
+    ('installer: drive letters absolute everywhere again', 'sh@posix', lambda: edit(
         'install.sh', 'MINGW*|MSYS*|CYGWIN*) drive_letters_are_absolute=1 ;;',
         'MINGW*|MSYS*|CYGWIN*|*) drive_letters_are_absolute=1 ;;')),
     ('installer: ps1 back to IsPathRooted', 'win', lambda: edit(
@@ -222,7 +247,7 @@ CASES = [
         '.claude-plugin/marketplace.json', 'zhoukaichaoaa/lean-skills.git',
         'someone-else/not-lean-skills.git')),
     ('manifest: skill count inflated to 19', 'meta', lambda: edit(
-        '.claude-plugin/plugin.json', '9 skills, 5 resident', '19 skills, 5 resident')),
+        '.claude-plugin/plugin.json', '9 skills, 4 resident', '19 skills, 4 resident')),
     ('changelog: version demoted from a heading', 'meta', lambda: edit(
         'CHANGELOG.md', '## %s —' % VERSION, '## Unreleased (was %s) —' % VERSION)),
     ('notice: a continuation row splits one file in two', 'meta', lambda: edit(
@@ -258,10 +283,28 @@ def main():
     cases = [c for c in CASES if want in c[0]]
     if not cases:
         sys.exit('no case matches %r' % want)
-    survivors = []
+    # A mutation is "caught" when its leg goes red. That inference is only
+    # valid if the leg is green to begin with: a leg broken for some unrelated
+    # reason reports every mutation as caught while proving nothing at all.
+    # So establish the baseline first and refuse to interpret a red one.
+    legs = sorted({c[1] for c in cases if not unavailable(c[1])})
+    for j, leg in enumerate(legs):
+        fresh(900 + j)
+        rc = run_leg(leg)
+        print('baseline  leg %-4s rc=%d%s' % (leg, rc, '' if rc == 0 else '  <-- RED'))
+        if rc != 0:
+            print('\nleg %r fails unmutated; its mutation results mean nothing' % leg)
+            shutil.rmtree(root, ignore_errors=True)
+            return 1
+
+    survivors, skipped = [], []
     for i, (label, leg, mutate) in enumerate(cases, 1):
-        if leg == 'win' and os.name != 'nt':
-            print('skipped   %s (needs Windows)' % label)
+        why = unavailable(leg)
+        if why:
+            # counted apart, never as caught: an unexecuted mutation is not
+            # evidence of anything
+            print('skipped   %s (%s)' % (label, why))
+            skipped.append(label)
             continue
         fresh(i)
         try:
@@ -275,7 +318,8 @@ def main():
         print('%s %s' % ('caught   ' if ok else 'SURVIVED ', label))
         if not ok:
             survivors.append(label)
-    print('\n%d/%d caught' % (len(cases) - len(survivors), len(cases)))
+    ran = len(cases) - len(skipped)
+    print('\n%d/%d caught, %d skipped' % (ran - len(survivors), ran, len(skipped)))
     shutil.rmtree(root, ignore_errors=True)
     return 1 if survivors else 0
 
