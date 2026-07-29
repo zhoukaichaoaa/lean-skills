@@ -92,7 +92,10 @@ dest_abs=$(CDPATH= cd -- "$dest" && pwd -P)
 
 undo_created() {
   printf '%s' "$created_levels" | while IFS= read -r d; do
-    [ -n "$d" ] && rmdir "$d" 2>/dev/null || true
+    # an explicit if, not `A && B || C`: with the one-liner, C also runs when A
+    # is false, which happens to be harmless here and would not be if the tail
+    # ever grew a second command
+    if [ -n "$d" ]; then rmdir "$d" 2>/dev/null || true; fi
   done
 }
 refuse() { undo_created; echo "refusing: target $dest_abs is the source (or aliases it)" >&2; exit 2; }

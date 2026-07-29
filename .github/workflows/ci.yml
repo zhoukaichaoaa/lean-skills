@@ -614,7 +614,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          shellcheck --version | head -2
+          # Pinned. The runner image ships 0.9.0 today and that is not a stable
+          # interface: a linter whose rule set moves under you either starts
+          # failing on unchanged code or quietly stops catching things. This
+          # version is also what `pip install shellcheck-py` gives locally, so
+          # the gate a developer runs is the gate CI runs.
+          SC_VER=0.11.0
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/v${SC_VER}/shellcheck-v${SC_VER}.linux.x86_64.tar.xz" \
+            | tar -xJ -C "$RUNNER_TEMP"
+          SC="$RUNNER_TEMP/shellcheck-v${SC_VER}/shellcheck"
+          "$SC" --version
+          "$SC" --version | grep -qx "version: ${SC_VER}" \
+            || { echo "shellcheck is not the pinned ${SC_VER}"; exit 1; }
+          shellcheck() { "$SC" "$@"; }
           # The recipe blocks are production code: a model runs them over the
           # user's uncommitted work. They must be clean with no exclusions.
           # This is not theoretical - v0.17.0 shipped `git diff --binary --
