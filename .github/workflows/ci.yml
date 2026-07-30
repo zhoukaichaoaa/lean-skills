@@ -664,8 +664,12 @@ jobs:
           # the rollback anchors are literal shell text handed to python and must
           # not expand; SC1091 because the sourced recipe only exists at run time;
           # SC2086 on $args because splitting it into flags is the point.
+          # parking_property.sh is linted here but not RUN in CI: it is slow and
+          # random, so a red needs its seed replayed before it means anything.
+          # It is a pre-release leg (README's release checklist, step 8).
           shellcheck -s bash -e SC2016,SC1091,SC2086,SC2012 \
-            tests/parking_matrix.sh tests/parking_rollback.sh tests/install_matrix.sh tests/parking_crash.sh
+            tests/parking_matrix.sh tests/parking_rollback.sh tests/install_matrix.sh tests/parking_crash.sh \
+            tests/parking_property.sh
           echo "shellcheck: recipe blocks clean with no exclusions; v0.17.0 still rejected"
 
       - name: manifests and frontmatter
@@ -1257,13 +1261,62 @@ jobs:
           # the file parked, unlisted and never returned - with restore exiting
           # 0. That released version is the fixture: no in-line rewriting, and
           # it stays honest even if the current wording moves.
+          # "It went red" is NOT enough, and 0.17.7 is why. A clause in
+          # check_invariant looks like dead code against HEAD - 0.17.5 stopped
+          # creating $PARK/untracked, so it walks a path that is not there - and
+          # deleting it left the current recipe at an unchanged 37/0/8. But
+          # against v0.17.2 that directory exists and the clause is live: with it
+          # gone this RED drops from 4 failed to 2, losing the move/manifest
+          # window itself. The old gate only asked "did it fail?", so the RED
+          # could halve in silence. Pin the names.
+          #
+          # `passed` and `skipped` are deliberately NOT pinned: how many
+          # injection points parse is a bash-version property and may differ
+          # between the Linux and macOS runners. The failure names cannot.
           for old in v0.17.2; do
             git show "$old:skills/resolving-merge-conflicts/SKILL.md" > "$RUNNER_TEMP/old-$old.md" 2>/dev/null || continue
-            if bash tests/parking_crash.sh "$RUNNER_TEMP/old-$old.md" >/dev/null 2>&1; then
+            rc=0
+            bash tests/parking_crash.sh "$RUNNER_TEMP/old-$old.md" > "$RUNNER_TEMP/red-$old.log" 2>&1 || rc=$?
+            if [ "$rc" -eq 0 ]; then
               echo "the crash suite passes $old, whose restore trusts the manifest; it must not"
               exit 1
             fi
+            grep -qE '^[0-9]+ passed, 4 failed, [0-9]+ skipped' "$RUNNER_TEMP/red-$old.log" \
+              || { echo "$old RED changed strength; expected exactly 4 failures:"; tail -3 "$RUNNER_TEMP/red-$old.log"; exit 1; }
+            for want in 'killed after line 30' 'killed after line 31' 'killed after line 69' 'killed mid-move'; do
+              grep -qF "FAIL  $want" "$RUNNER_TEMP/red-$old.log" \
+                || { echo "$old RED no longer catches: $want"; exit 1; }
+            done
           done
+
+          # The property test is not run in full here - it is slow and random, and
+          # a random red means nothing until its seed is replayed. Its two REDs
+          # are not random though: fixed seed, fixed target version, fixed wording.
+          # So they are pinned, and this is also the only place the property test
+          # runs on anything but the author's Windows box.
+          git show v0.17.0:skills/resolving-merge-conflicts/SKILL.md > "$RUNNER_TEMP/pp-0170.md"
+          git show v0.17.2:skills/resolving-merge-conflicts/SKILL.md > "$RUNNER_TEMP/pp-0172.md"
+          rc=0
+          bash tests/parking_property.sh -n 12 -s 1000 -k "$RUNNER_TEMP/pp-0170.md" > "$RUNNER_TEMP/pp-red1.log" 2>&1 || rc=$?
+          [ "$rc" -ne 0 ] || { echo "the property test passes v0.17.0, whose diff word-splits paths with spaces; it must not"; exit 1; }
+          grep -qF 'tree differs from before and NO state file points at anything' "$RUNNER_TEMP/pp-red1.log" \
+            || { echo "v0.17.0 RED changed its reason:"; tail -5 "$RUNNER_TEMP/pp-red1.log"; exit 1; }
+          rc=0
+          bash tests/parking_property.sh -n 30 -s 7000 -c -k "$RUNNER_TEMP/pp-0172.md" > "$RUNNER_TEMP/pp-red2.log" 2>&1 || rc=$?
+          [ "$rc" -ne 0 ] || { echo "the property test passes v0.17.2 under crash injection; it must not"; exit 1; }
+          # `\./.+` and not just the wording: the first version of that clause
+          # used `rev`, which MSYS does not have, so the path came out empty and
+          # the check reported every changed file as a violation. It was red for
+          # the wrong reason and looked identical to a real red. A named path is
+          # the difference.
+          grep -qE 'held \./.+ while its path in the tree was free' "$RUNNER_TEMP/pp-red2.log" \
+            || { echo "v0.17.2 crash RED changed its reason, or reports an empty path:"; tail -5 "$RUNNER_TEMP/pp-red2.log"; exit 1; }
+          # ...and the same seeds must be GREEN on the current recipe. A harness
+          # that fails everything is red for free and proves nothing.
+          bash tests/parking_property.sh -n 12 -s 1000 > "$RUNNER_TEMP/pp-green1.log" 2>&1 \
+            || { echo "the property test fails the CURRENT recipe on the v0.17.0 seeds:"; tail -5 "$RUNNER_TEMP/pp-green1.log"; exit 1; }
+          bash tests/parking_property.sh -n 30 -s 7000 -c > "$RUNNER_TEMP/pp-green2.log" 2>&1 \
+            || { echo "the property test fails the CURRENT recipe on the v0.17.2 crash seeds:"; tail -5 "$RUNNER_TEMP/pp-green2.log"; exit 1; }
           # ...and each fix, rolled back, must turn the matrix red. Two guards
           # are excluded by name in that suite's own notes and say why: the
           # directory entry guard is unreachable from a legal input list, and

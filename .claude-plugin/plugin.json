@@ -1,7 +1,7 @@
 {
   "name": "lean-skills",
   "description": "9 skills, 4 resident. The parts of mattpocock/skills and obra/superpowers that earn their context cost — no mandatory preamble, no session-start injection.",
-  "version": "0.17.6",
+  "version": "0.17.7",
   "author": {
     "name": "zhoukaichaoaa"
   },

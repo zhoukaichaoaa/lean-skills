@@ -1,5 +1,88 @@
 # Changelog
 
+## 0.17.7 — 2026-07-31
+
+停靠机制简化计划第 5 步：**属性测试**。新增 `tests/parking_property.sh`。
+
+### 打的是类，不是实例
+
+迄今每一个配方缺陷都属于同一类 —— **没人枚举到的状态**：`notes/` 折叠成一行、父级是符号链接、叶子指向目录、崩溃落在 mv 与记账之间。矩阵和逐条回滚检查的是有人想到的状态；这条腿不枚举，它**生成**。
+
+随机在途工作（空格、引号、方括号 glob 名、前导横线、非 ASCII、深层嵌套、符号链接含指向目录与悬空、staged / unstaged / untracked 混合）× 随机冲突现场（merge / rebase / cherry-pick）。
+
+**不变量只有一条** —— 每个用户路径二居其一：字节级原样回位（内容、mode、链接目标都算），或 HELD 且停车区、state、被报告的路径三者齐全，**并且它在树里的位置真的被占用**。任何第三态都是违例。
+
+### 两个维度各有自己的 RED
+
+| 维度 | 靶子 | 报的错 |
+|---|---|---|
+| 普通 | v0.17.0 —— `git diff --binary -- $(tr …)` 没加引号，带空格的路径被词分割 | `tree differs from before and NO state file points at anything` |
+| 崩溃 | v0.17.2 —— restore 把 manifest 当权威，而 park 在移动之后才写它 | `held <path> while its path in the tree was free` |
+
+同一批种子在当前配方上全绿。
+
+### 途中修掉四处 harness 自己的缺陷
+
+每一处都是"先红后绿"这条纪律逼出来的，写在这里是因为它们都可能再犯：
+
+1. **种子不可复现。** `$(rnd n)` 是命令替换，bash 每个子 shell 会用 pid 重新播种 `$RANDOM` —— 种子只控制了父 shell，生成器实际是真随机的。同一条命令跑两次，一次红一次绿。**一个重放不出自己反例的属性测试比没有更糟**：它报的缺陷没人能动手。改成状态存在变量里、不经子 shell 的 LCG。
+2. **不变量少了一句判据。** "扣在停车区的文件，它在树里的位置必须真的被占用" —— 少了这句，v0.17.2 跑 150 例、其中 **139 例真被 SIGKILL，全绿**。文件就躺在停车区里，state 在，restore 还报了路径，只差没人问一句那个位置是不是空的。这句判据 `parking_crash.sh` 当年就是为这个 bug 加的，复制 `snapshot()` 时漏掉了它。
+3. **压制 `Killed` 消息时把退出码一起扔了。** 为了让 SIGKILL 的通知不污染输出，包装层末尾加了 `; :`，顺手也丢掉了证明 kill 落地的 137 —— 崩溃维度会整个空转却全绿。改成 `rc=$?; exit $rc`：既阻止 bash 把包装层 exec 掉，又把退出码带出来。
+4. **记账折进了通过数。** symlink 在建不了真链接的平台上曾被悄悄降级成普通文件混进 pass；注入点挑中一条这次执行走不到的分支时，park 正常退出，那一例也曾算作崩溃覆盖。两者现在都单列。
+
+### 记账口径
+
+```
+200 passed, 0 failed, 0 skipped
+symlink shapes: 127 generated, 0 skipped for lack of platform support
+crash injection: 144 cases actually died (SIGKILL), 56 never reached the kill, 0 injection points unparseable
+```
+
+"真的死了多少例"和"symlink 形状生成了多少"永远单列，不折进通过数。
+
+### 不变量精确了一处
+
+崩溃之后"树原样 + 留下 state"是**合法**的：kill 落在写完 patch、还没回退工作区的位置时，`git apply --3way` 会发现 preimage 已经应用（`does not match index`），restore 拒绝清理一个它没能replay 的 patch —— 数据一点没丢，配方也给了出路。所以这一态只在**真的崩溃了的那一例**放宽，判据键的是这一例是否真死，不是是否传了 `-c`。
+
+### 一段看起来像死代码、实测不是的判据 —— 差点被删掉
+
+`tests/parking_crash.sh` 的 `check_invariant` 末尾那段遍历 `$PARK/untracked/` 的循环，**对 HEAD 确实永不执行**：0.17.5 把未跟踪侧从「接管」改为「告知」之后，那个目录不再被创建，`find` 走在一个不存在的路径上，报错被 `2>/dev/null || :` 吞掉，循环体一次都不进。删除它，崩溃套件对当前配方仍是 **37 / 0 / 8**，数字纹丝不动 —— 看上去正是「删了没人心疼」的死代码。
+
+**它不是。** `parking_crash.sh` 收一个 SKILL.md 参数，就是为了能指向旧版本做 RED；而 v0.17.2 的 park **会**创建 `$PARK/untracked`，对那个版本这段是活的，并且是抓 manifest 缺陷的那一条。实测：
+
+```
+删除前  vs v0.17.2:  35 passed, 4 failed   FAIL line 30 / line 31 / line 69 / mid-move
+删除后  vs v0.17.2:  37 passed, 2 failed   FAIL line 30 / line 31
+```
+
+丢掉的两条 —— **`killed after line 69`（v0.17.2 的 mv/manifest 窗口本身）与 mid-move** —— 恰好是这段判据存在的全部理由。CI 只要求「旧版本必须红」，所以门闸不会响；红的强度悄悄折半，没有任何东西会说话。
+
+**已恢复，并在原地钉上标注**：写明它对 HEAD 不可达、对 RED 靶版本是活的、以及删掉会让 RED 从 4 掉到 2。**「对当前代码不可达」和「可以删」不是一回事** —— 当一个套件的职责包含证明自己抓得住旧缺陷时，只在旧版本上活着的判据同样是资产。
+
+这条属性测试的崩溃不变量报的 `held <path> while its path in the tree was free`，与它是同一条判断的两个活体，互为备份而非替代。
+
+### 把这次险情变成永久护栏：RED 期望钉死
+
+上面那段差点被删掉，而 CI **不会说一个字** —— 它的门闸只问「旧版本红了吗」，不问「红了几条、红在哪」。RED 强度可以悄悄折半，退出码一样是 1。
+
+现在钉死：
+
+- **崩溃套件对 v0.17.2**：断言恰好 `4 failed`，并**逐名**要求 `killed after line 30` / `line 31` / `line 69` / `mid-move` 四条都在（照逐条回滚那份名单的先例）。
+- **属性测试两维**：靶版本 + 期望报错文案一并钉上。v0.17.0 必须报 `tree differs from before and NO state file points at anything`；v0.17.2 崩溃维必须报 `held <path> while its path in the tree was free`，而且**正则要求那个 `<path>` 非空**（`held \./.+ while`）—— 空路径正是本批踩过的假红形态：`rev` 在 MSYS 不存在，提取出空串，判据退化成「任何变化都算违例」，红得毫无道理，却和真红长得一模一样。
+- **同一批种子在当前配方上必须绿**：一个什么都失败的 harness 是免费的红，证明不了任何事。
+
+**`passed` 与 `skipped` 故意不钉**：有多少注入点能解析是 bash 版本的属性，Linux 与 macOS runner 可能给出不同的数；失败的**名字**不会。
+
+顺带一个副作用值得记：这也是属性测试**第一次在 Windows 之外的平台上运行**。此前它只在作者本机跑过，而那正是 REPORT 里列出的最大覆盖缺口。RED 是确定性的（固定种子、固定靶版本），所以进 CI 不违反「随机的东西不进常规 CI」那条 —— 进去的是它的两个签名，不是那 200 例随机。
+
+### 接入方式与预算
+
+发版前手动跑，**不进常规 CI**（慢，且随机 —— 一条红必须先用种子复现才算数）。CI 只对它跑 shellcheck。用法与两个 RED 记在 README 发布清单第 8 条。
+
+```
+200 例 非崩溃  4m44s      200 例 崩溃  4m16s
+```
+
 ## 0.17.6 — 2026-07-30
 
 `spec-review` 的盲审修复批：**12 条 findings 全部落地,每条先实测复现再动手**。基线解析是这个技能唯一的输入,取错了base 之后所有 findings 都是虚构的 —— 本批修的全部集中在这一段。

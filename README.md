@@ -215,12 +215,25 @@ cd lean-skills
 5. 更新 CHANGELOG。
 6. **本地把 CI 的每条腿在干净克隆上原样跑一遍。** 这一步已经抓到过四个只在 CI 里才会暴露的 bug。
 7. **跑 `python tests/mutations.py`** —— 它会逐条把 CI 声称保护的东西故意改坏，确认对应的 step 真的会红；新增断言时同步加一个 case。**先看基线那几行**：它会在变异之前把每条 leg 原样跑一遍，任何一条基线是红的，这条 leg 上的所有"抓到"都是白捡的（0.17.0 发现五条里有三条如此）。同理，跳过的用例单独计数，永远不折进"抓到"。涉及“失败时会怎样”的断言要用**故障注入**（PATH 上垫一个假 `mv`、或用 PowerShell 函数遮蔽 `Move-Item`），并**先确认它在旧代码上是红的**—— 否则测的是空气（写 shim 时 `PATH` 里不能放 `C:/...` 这种带冒号的路径，Git Bash 会把它拆坏，shim 永远找不到）。旧的措辞：**对新增的断言做变异测试** —— 故意把被测的东西改坏，确认它真的会红。哑弹断言在这个仓库出现过不止一次（`-notmatch 'THEIRS'` 因大小写不敏感而永不触发）。
-8. commit → push **main** → **等三平台 CI 全绿** → 然后才 `git tag vX.Y.Z && git push origin vX.Y.Z` → `gh release create` → 核对 GitHub 上的描述 → `claude plugin validate --strict .claude-plugin/plugin.json` 与 `--strict .claude-plugin/marketplace.json`（CI 跑的就是这两条）
+8. **发版前跑一次 `bash tests/parking_property.sh`**（默认 200 例）。它不枚举状态，它**生成**状态：随机的在途工作（空格、引号、方括号 glob 名、前导横线、非 ASCII、深层嵌套、符号链接含指向目录与悬空、staged/unstaged/untracked 混合）× 随机的冲突现场（merge / rebase / cherry-pick）。不变量只有一条 —— 每个用户路径**二居其一**：字节级原样回位，或 HELD 且停车区、state 与被报告的路径三者齐全。**任何第三态都是违例。** 迄今每一个配方缺陷都属于"没人枚举到的状态"这一类，这条腿打的就是这个类，不是实例。
+
+   > **不进常规 CI**：慢，而且随机 —— 一条红必须先用种子复现出来才算数。失败时它打印种子与该例的路径清单，`-n 1 -s <seed>` 精确重放。`-c` 加崩溃注入（每例随机挑一个语句后 SIGKILL）；`-k <path/SKILL.md>` 对别的版本跑。
+   >
+   > **两个维度各有自己的 RED，都验过**：
+   >
+   > - 普通维度 —— `-k` 指向 **v0.17.0**（那版 `git diff --binary -- $(tr …)` 没加引号，带空格的路径被词分割），报"tree differs from before and NO state file points at anything"；
+   > - 崩溃维度 —— `-c -k` 指向 **v0.17.2**（restore 把 manifest 当权威，而 park 在移动之后才写它），报"held \<path\> while its path in the tree was free"。
+   >
+   > 同一批种子在当前配方上全绿。**先确认它会红，再信它的绿** —— 这条不是客套：崩溃维度第一版少写了一句判据（"扣在停车区的文件，它在树里的位置必须真的被占用"），于是 v0.17.2 跑 150 例、其中 139 例真被 SIGKILL，**全绿**。数据就摆在停车区里，state 也在，restore 还报了路径，只差没人问一句"那它的位置空着吗"。补上判据才红。
+
+   > **`-c` 的记账要看第二行。** 注入点是随机挑的，挑中一个这次执行走不到的分支，park 就正常退出了 —— 那一例仍是有效用例，但它**不是崩溃证据**。所以输出把"真的死了多少例"单列，永不折进通过数。同理 symlink：平台建不了真符号链接时，那些形状单独计数而不是悄悄降级成普通文件混进 pass。
+
+9. commit → push **main** → **等三平台 CI 全绿** → 然后才 `git tag vX.Y.Z && git push origin vX.Y.Z` → `gh release create` → 核对 GitHub 上的描述 → `claude plugin validate --strict .claude-plugin/plugin.json` 与 `--strict .claude-plugin/marketplace.json`（CI 跑的就是这两条）
 
    > **顺序不是建议，是硬约束，因为标签不能移动。** 0.17.0 就是把这一步做反了：本机只有 Windows，另两个平台完全托给 CI，却在 CI 跑完前打了标签 —— 结果一个 `xargs -a`（GNU 专有，BSD 直接拒绝）让整个停靠配方在 macOS 上一步都走不了，只能作废重发 0.17.1。**本机验证不覆盖的平台，只能靠 CI；那就必须等它。**
    >
    > 同一次还暴露出：macOS 在第一个失败的 step 就停了，**后面所有 step 都是 skipped**。所以"CI 报了一个错"不等于"只有这一个错" —— 修完要重跑，别假设下游没问题。
-9. **发布说明里不要写 codeload 压缩包的 SHA-256。** 那些包 GitHub 实时生成，字节不保证稳定，读者核不出来。要给校验值就给 tag/commit/tree 的 git 对象哈希。签名公钥、验证方法，以及这些签名**能证明什么、不能证明什么**，见 [SIGNING.md](SIGNING.md)。
+10. **发布说明里不要写 codeload 压缩包的 SHA-256。** 那些包 GitHub 实时生成，字节不保证稳定，读者核不出来。要给校验值就给 tag/commit/tree 的 git 对象哈希。签名公钥、验证方法，以及这些签名**能证明什么、不能证明什么**，见 [SIGNING.md](SIGNING.md)。
 
 ## 归属
 

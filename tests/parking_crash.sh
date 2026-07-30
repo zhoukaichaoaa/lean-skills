@@ -115,7 +115,20 @@ check_invariant() {   # $1 repo -> prints the reason on failure
       [ -n "$(find "$pk" -mindepth 1 ! -type d -print 2>/dev/null | head -n 1)" ] || {
         echo "kept an empty parking area while the tree is incomplete"; exit 1; }
     fi
-    # ...and every file still in there must be blocked by an occupied path
+    # ...and every file still in there must be blocked by an occupied path.
+    #
+    # THIS LOOKS LIKE DEAD CODE AGAINST HEAD AND IS NOT. 0.17.5 stopped creating
+    # $PARK/untracked when the untracked side became inform-rather-than-take-over,
+    # so against the current recipe `find` walks a path that is not there, the
+    # error goes to /dev/null, and this loop never runs. But this suite takes a
+    # SKILL.md argument precisely so it can be aimed at older releases, and
+    # against v0.17.2 - the release whose manifest defect it was written for -
+    # that directory exists and this clause is the live one.
+    #
+    # Measured, 0.17.7: deleting it takes the v0.17.2 RED from 4 failed to 2.
+    # What goes missing is exactly the point of it - "killed after line 69",
+    # which is the move/manifest window itself, and the mid-move case.
+    # Dead for HEAD, load-bearing for the RED. Do not remove it for being quiet.
     find "$pk/untracked" -mindepth 1 ! -type d -print0 2>/dev/null > "$W/held" || :
     while IFS= read -r -d '' src; do
       p=${src#"$pk/untracked/"}
