@@ -67,7 +67,13 @@ crash injection: 144 cases actually died (SIGKILL), 56 never reached the kill, 0
 
 现在钉死：
 
-- **崩溃套件对 v0.17.2**：断言恰好 `4 failed`，并**逐名**要求 `killed after line 30` / `line 31` / `line 69` / `mid-move` 四条都在（照逐条回滚那份名单的先例）。
+- **崩溃套件对 v0.17.2**：逐名要求 **`killed after line 69`（mv/manifest 窗口本身）与 `killed mid-move`** 两条都在，并要求整体仍是红。
+
+  > **第一版把这条钉错了**，值得记下来。它钉的是「恰好 `4 failed` + 四个名字全在」，理由写的是「计数依平台而变，名字不会」。推上去，Ubuntu 过、**macOS 红**：那边只有 **2 failed**。差的两条是 `line 30` 与 `line 31`，它们由别的判据抓，与这段无关。
+  >
+  > 该钉的从来不是总数，而是**删掉 `$PARK/untracked` 那段判据就会消失的那两条** —— 本机实测 4 → 2，丢的正是 `line 69` 与 `mid-move`。它们才是「RED 还有强度」的定义。其余的让它随平台去。
+  >
+  > 顺带把诊断从 `tail -3` 换成完整的 FAIL/skip 名单：上一版红的时候，日志只给了一行 detail，看不出到底少了哪两条。
 - **属性测试两维**：靶版本 + 期望报错文案一并钉上。v0.17.0 必须报 `tree differs from before and NO state file points at anything`；v0.17.2 崩溃维必须报 `held <path> while its path in the tree was free`，而且**正则要求那个 `<path>` 非空**（`held \./.+ while`）—— 空路径正是本批踩过的假红形态：`rev` 在 MSYS 不存在，提取出空串，判据退化成「任何变化都算违例」，红得毫无道理，却和真红长得一模一样。
 - **同一批种子在当前配方上必须绿**：一个什么都失败的 harness 是免费的红，证明不了任何事。
 

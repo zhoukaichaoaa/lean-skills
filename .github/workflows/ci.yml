@@ -1294,24 +1294,43 @@ jobs:
           # window itself. The old gate only asked "did it fail?", so the RED
           # could halve in silence. Pin the names.
           #
-          # `passed` and `skipped` are deliberately NOT pinned: how many
-          # injection points parse is a bash-version property and may differ
-          # between the Linux and macOS runners. The failure names cannot.
+          # WHAT IS PINNED, AND WHY NOT THE TOTAL. The first attempt pinned
+          # "exactly 4 failed" plus all four names, on the reasoning that counts
+          # are platform-dependent but names are not. Measured on the runners:
+          # that reasoning was wrong. Ubuntu fails 4, macOS fails 2. The two it
+          # does not reproduce are `line 30` and `line 31`, which are caught by
+          # other clauses entirely.
+          #
+          # The two that matter are `line 69` - the move/manifest window itself -
+          # and `mid-move`. Those are exactly the two that vanish when the
+          # $PARK/untracked clause is deleted (measured: 4 failed -> 2 failed),
+          # so they, not the total, are what "the RED still has its strength"
+          # means. Pin those; let the rest vary by platform.
           for old in v0.17.2; do
             sh tests/fixture.sh "$old" skills/resolving-merge-conflicts/SKILL.md \
-              "$RUNNER_TEMP/old-$old.md" "the crash suite must fail on $old by 4 named kills"
+              "$RUNNER_TEMP/old-$old.md" "the crash suite must fail on $old at the move/manifest window"
             rc=0
             bash tests/parking_crash.sh "$RUNNER_TEMP/old-$old.md" > "$RUNNER_TEMP/red-$old.log" 2>&1 || rc=$?
             if [ "$rc" -eq 0 ]; then
               echo "the crash suite passes $old, whose restore trusts the manifest; it must not"
               exit 1
             fi
-            grep -qE '^[0-9]+ passed, 4 failed, [0-9]+ skipped' "$RUNNER_TEMP/red-$old.log" \
-              || { echo "$old RED changed strength; expected exactly 4 failures:"; tail -3 "$RUNNER_TEMP/red-$old.log"; exit 1; }
-            for want in 'killed after line 30' 'killed after line 31' 'killed after line 69' 'killed mid-move'; do
-              grep -qF "FAIL  $want" "$RUNNER_TEMP/red-$old.log" \
-                || { echo "$old RED no longer catches: $want"; exit 1; }
+            for want in 'killed after line 69' 'killed mid-move'; do
+              grep -qF "FAIL  $want" "$RUNNER_TEMP/red-$old.log" || {
+                echo "$old RED no longer catches: $want"
+                echo "  this is one of the two the \$PARK/untracked clause exists for;"
+                echo "  losing it means the RED halved. What the run did report:"
+                grep -E '^  (FAIL|skip)|^[0-9]+ passed' "$RUNNER_TEMP/red-$old.log" | sed 's/^/    /'
+                exit 1
+              }
             done
+            # ...and it must still be a red overall, with those two among the
+            # failures rather than merely mentioned somewhere.
+            grep -qE '^[0-9]+ passed, [1-9][0-9]* failed' "$RUNNER_TEMP/red-$old.log" || {
+              echo "$old RED reports no failures at all:"
+              grep -E '^[0-9]+ passed' "$RUNNER_TEMP/red-$old.log" | sed 's/^/    /'
+              exit 1
+            }
           done
 
           # The property test is not run in full here - it is slow and random, and
