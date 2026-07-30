@@ -9,16 +9,6 @@ cd "$(dirname "$0")/.." || exit 1
 SKILL=skills/resolving-merge-conflicts/SKILL.md
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 
-# Does this mv scan for options *after* the first operand? GNU does (it
-# permutes), BSD/macOS does not. It decides whether one rollback below can fail
-# at all: in park the dash-leading name is argument 1, which every mv parses as
-# an option, but in restore it is argument 2, and a non-permuting mv has already
-# stopped looking by then. The missing `--` is real on GNU and inert on BSD.
-MV_PERMUTES=0
-_mp=$(mktemp -d); : > "$_mp/src"
-( cd "$_mp" && mv src -dst ) 2>/dev/null || MV_PERMUTES=1
-rm -rf "$_mp"
-
 skips=0
 skip_case() { skips=$((skips+1)); printf '  skip      %-52s %s\n' "$1" "$2"; }
 
@@ -67,20 +57,7 @@ run_rollback "restore trusts an inherited PARK instead of the state file" \
   '   PARK_NAME="$(cat -- "$STATE")" || die "cannot read state"' \
   '   PARK_NAME="${PARK_NAME:?}"' || bad=1
 
-run_rollback "no -- on the mv in park" \
-  '     mv -- "$p" "$PARK/untracked/$p" || die "cannot park $p (already parked: $(tr -d -c '"'"'\000'"'"' < "$PARK/manifest" | wc -c))"' \
-  '     mv "$p" "$PARK/untracked/$p" || die "cannot park $p"' || bad=1
 
-if [ "$MV_PERMUTES" -eq 1 ]; then
-  run_rollback "no -- on the mv in restore" \
-    '     mv -- "$src" "$p" || die "cannot put $p back"' \
-    '     mv "$src" "$p" || die "cannot put $p back"' || bad=1
-else
-  # Not a weakness in the test and not a reason to drop the `--`: on this mv the
-  # vector cannot exist, while on GNU it silently mangles the restore of any
-  # path whose name starts with a dash.
-  skip_case "no -- on the mv in restore" "this mv does not scan for options after the first operand"
-fi
 
 # An honest :(literal) case does exist, contrary to the note that used to sit
 # here -- that note generalised from `b*c.txt`, which NTFS genuinely cannot
@@ -95,25 +72,7 @@ run_rollback "checkout loses :(literal) and reaches a conflicted file" \
   '     git checkout -- ":(literal,top)$p" || die "cannot restore $p from the index"' \
   '     git checkout -- ":(top)$p" || die "cannot restore $p from the index"' || bad=1
 
-run_rollback "manifest written before the move succeeds" \
-  '     mv -- "$p" "$PARK/untracked/$p" || die "cannot park $p (already parked: $(tr -d -c '"'"'\000'"'"' < "$PARK/manifest" | wc -c))"
-     printf '"'"'%s\0'"'"' "$p" >> "$PARK/manifest" || die "parked $p but could not record it"' \
-  '     printf '"'"'%s\0'"'"' "$p" >> "$PARK/manifest"
-     mv -- "$p" "$PARK/untracked/$p" || die "cannot park $p (already parked: $(tr -d -c '"'"'\000'"'"' < "$PARK/manifest" | wc -c))"' || bad=1
 
-# The fix this checks is a *move*, so undoing it is two edits: take the
-# publish out of the top and put it back after the last move, which is
-# exactly v0.17.1's order. Nothing else changes, so if the matrix stays
-# green the recovery assertion in partial_case is not doing its job.
-run_rollback "state published after the moves, as in v0.17.1" \
-  '   printf '"'"'%s\n'"'"' "$PARK_NAME" > "$STATE.tmp" || die "cannot write state"
-   mv -- "$STATE.tmp" "$STATE" || die "cannot publish state"
-   mv -- "$G/lean-park-input" "$PARK/input" || die "cannot take the input list"' \
-  '   mv -- "$G/lean-park-input" "$PARK/input" || die "cannot take the input list"' \
-  '   done < "$PARK/untracked.list"' \
-  '   done < "$PARK/untracked.list"
-   printf '"'"'%s\n'"'"' "$PARK_NAME" > "$STATE.tmp" || die "cannot write state"
-   mv -- "$STATE.tmp" "$STATE" || die "cannot publish state"' || bad=1
 
 # Load-bearing, and only falsifiable because the matrix now feeds one
 # malformed list. Before that case existed this rollback would have
@@ -135,6 +94,12 @@ run_rollback "park stops checking that the input list is NUL-terminated" \
 #     They are rolled back together below; pinning one would be a case that
 #     cannot fail.
 
+#   * publishing the state before the first change to the working tree - with
+#     the untracked side gone, park's only worktree change is `git checkout`,
+#     and a wrong publish order costs nothing the *matrix* can see. Its
+#     evidence moved to tests/parking_crash.sh, where moving the publish after
+#     the checkout loop turns three kill points red (lines 75-77). A rollback
+#     here would survive, so there is not one.
 # No case for the two `specs` guards in the park block. They are defence in
 # depth: with the NUL-termination check above them, a legal input list always
 # yields one spec per entry, so `-s "$PARK/specs"` and the arity comparison are
@@ -142,67 +107,19 @@ run_rollback "park stops checking that the input list is NUL-terminated" \
 # cannot turn the matrix red, and a rollback that cannot fail is decoration.
 # They are labelled as such in the recipe rather than given a fabricated case.
 
-# Restored from v0.15.0 alongside abandon_case. Without the untracked half
-# there is nothing in the parking area to survive a `git rebase --abort`,
-# and the collision cases lose their subject too. Measured on the 45-case
-# matrix - six, not the four a reading of the code predicts, because
-# `park fails partway` also asserts the files it claims to have parked have
-# left the worktree, and both symlink cases park untracked links:
-#   clash / root
-#   clash / sub
-#   park fails partway
-#   abandoned after parking
-#   parent became a symlink out of the repository
-#   leaf is a symlink to a directory
-run_rollback "untracked side not parked" \
-  '   while IFS= read -r -d '"'"''"'"' p; do
-     # not `dirname -- "$p"`: BSD dirname takes no options, so the `--` that
-     # protects a name like -draft.txt on GNU becomes the argument on macOS
-     case "$p" in */*) d=${p%/*} ;; *) d=. ;; esac
-     mkdir -p -- "$PARK/untracked/$d" || die "cannot make a home for $p"
-     mv -- "$p" "$PARK/untracked/$p" || die "cannot park $p (already parked: $(tr -d -c '"'"'\000'"'"' < "$PARK/manifest" | wc -c))"
-     printf '"'"'%s\0'"'"' "$p" >> "$PARK/manifest" || die "parked $p but could not record it"
-   done < "$PARK/untracked.list"' \
+
+
+
+
+# The 0.17.5 promise, and the only thing standing behind it. Untracked work is
+# no longer moved, so the single thing the recipe still owes the user about it
+# is *saying which paths it left alone*. Silence there is indistinguishable
+# from having handled them. Deleting three guard cases along with the machinery
+# they guarded is only honest if the replacement behaviour carries its own
+# standing red, rather than a one-off demonstration at release time.
+run_rollback "park stops reporting the untracked work it left alone" \
+  '   [ -z "$LEFT" ] || printf '"'"'park: left in place, untracked and untouched:\n%s'"'"' "$LEFT"' \
   '   :' || bad=1
-
-# The parent-symlink protection, rolled back as a pair - because measurement
-# says neither half can be rolled back alone. Removing only the walk leaves
-# 45/0/0; removing only the LANDED check leaves 45/0/0; removing both turns
-# exactly `parent became a symlink out of the repository` red. They are two
-# layers over one vector, so a case pinning either one would be a case that
-# cannot fail. The replacement keeps its trailing newline on purpose: without
-# it the next line joins onto the `:` and the rollback measures a broken
-# recipe rather than a missing guard - which is what the first version of
-# this case did, reporting 41 red for entirely the wrong reason.
-run_rollback "restore stops guarding the parent components" \
-  '     blocked=
-     probe=
-     rest=$p
-     while [ "$rest" != "${rest#*/}" ]; do
-       seg=${rest%%/*}; rest=${rest#*/}
-       probe=${probe:+$probe/}$seg
-       if [ -L "$probe" ]; then blocked="$probe is a symlink"; break; fi
-       if [ -e "$probe" ] && [ ! -d "$probe" ]; then blocked="$probe is not a directory"; break; fi
-     done
-     if [ -n "$blocked" ]; then HELD=1; continue; fi
-' \
-  '     :
-' \
-  '     # ...and confirm where it actually landed, which is the only check that
-     # survives a symlink swapped in after the walk above.
-     LANDED="$(cd -- "$d" 2>/dev/null && pwd -P)" || LANDED=
-     case "$LANDED" in
-       "$TOP"|"$TOP"/*) : ;;
-       *) mv -- "$p" "$src" || die "$p landed outside the worktree at ${LANDED:-unresolvable} and would not come back"
-          HELD=1 ;;
-     esac
-' \
-  '' || bad=1
-
-run_rollback "no collision guard on the way back" \
-  '     if [ -e "$p" ] || [ -L "$p" ]; then HELD=1; continue; fi' \
-  '     :' || bad=1
-
 
 echo
 if [ "$bad" -eq 0 ]; then

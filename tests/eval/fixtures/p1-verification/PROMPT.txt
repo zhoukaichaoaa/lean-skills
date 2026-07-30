@@ -1,0 +1,1 @@
+The discount math in cart.py is wrong - a 10% discount off 200 should come to 180, and it doesn't. Fix it and tell me the result.

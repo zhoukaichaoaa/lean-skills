@@ -1,5 +1,67 @@
 # Changelog
 
+## 0.17.5 — 2026-07-30
+
+停靠机制简化计划第 4 步：**未跟踪侧从「接管」改为「告知」**。本版主体是**删代码**。
+
+### 为什么删得掉
+
+停靠未跟踪文件的唯一理由，是防备待重放的提交创建同名路径。实测那个场景（git 2.55）：
+
+```
+不停靠、直接 --continue:
+  error: The following untracked working tree files would be overwritten by merge:
+      notes.txt
+  rebase 仍活着? yes      用户文件: [USER ONLY COPY]
+按 git 的提示挑开再继续:
+  continue rc=0   rebase 完成? yes
+  仓库版 notes.txt: [from-c2]   用户版: [USER ONLY COPY]
+```
+
+**停靠抢先处理的，是一个本来就安全、具名、可恢复的拒绝。** 删它丢的是自动化，不是数据。现在配方列出它留在原地的路径，并在 step 8 写明那条拒绝出现时该怎么做。
+
+### 随之消失的一整族
+
+目录入口守卫、`mv` 搬运循环、manifest、碰撞守卫、父组件走查、LANDED 物理路径校验。
+
+**缩小后配方对用户路径的写动作清单** —— 零 `mkdir` / `mv` / `cp` / `ln`（全部落在 `$PARK` 或 `$G` 内），只剩三条且均由 git 按 pathspec 执行：
+
+```
+park     git checkout -- ':(literal,top)$p'
+restore  git apply --3way "$PARK/tracked.patch"
+restore  git restore --staged -- ':(literal,top)$p'
+```
+
+所以 0.17.4 修的那个“跟随父级符号链接把文件搬出仓库”向量是**结构性消失**，shell 不再拼路径。
+
+### 移除清单（逐名记账 —— 0.17.0 测试断代的直接教训）
+
+矩阵用例 45 → **42**：
+
+| 删除 | 为何随功能一起删 |
+|---|---|
+| `park fails partway` | 往未跟踪搬运循环注入 `mv` 失败——该循环已不存在 |
+| `parent became a symlink out of the repository` | 覆盖 restore 交回未跟踪文件时跟随父级符号链接——已无交回动作 |
+| `leaf is a symlink to a directory` | 覆盖入口守卫拒绝“指向目录的链接”——已无入口守卫 |
+
+改造而非删除：`clash` 改为断言 **git 自己按名拒绝、rebase 停住、用户文件完好，挑开后 continue 成功且两版共存**；`abandoned after parking` 改为断言未跟踪文件**原地**活过 abort；`untracked directory` 改为断言配方**报告并留下**它、且不发明 `notes/notes`。
+
+逐条回滚 11 → **5**，删除六条：`no -- on the mv in park`、`no -- on the mv in restore`、`manifest written before the move succeeds`、`untracked side not parked`、`restore stops guarding the parent components`、`no collision guard on the way back` —— 它们守的对象都随未跟踪侧走了；连带删掉已无守护对象的 `MV_PERMUTES` 探针。
+
+### 新承诺配新守门
+
+删三个旧守卫用例后，“告知而不接管”这个新行为自己必须有**常驻红证**，而不是一次性演示：新增回滚 `park stops reporting the untracked work it left alone`——把报告那行换成 `:`，矩阵 **41 passed, 1 failed**，唯一红的是 `untracked directory via step 3's own command`。
+
+### 一条不会红的回滚，删了而不是留着充数
+
+重锚“状态发布顺序”那条后它 **SURVIVED**：未跟踪侧删掉后，park 对工作区的唯一改动是 `git checkout`，发布顺序错了**矩阵看不见**。实测证据在崩溃套件：把发布挑到搬运之后 → **3 个注入点变红（第 75–77 行）**。回滚已删除并标注证据搬到了哪里。
+
+### 触发率 eval 首次有数据
+
+`tests/eval/` 入库（脚本与 fixture；原始 transcript 与 results 不入库，本地留档）。数字与局限写在 README 适用边界，**技能调用率与行为达成注记两数并给**：三次“漏触”经核 transcript 确认**都真跑了测试、真定位到了 bug**，只是没调 Skill 工具；正 5 的1 00% 未误触标注为 `disable-model-invocation` 的**结构性保证**，不是判断力。
+
+**验证**：矩阵 **42 / 0 / 0**；回滚 **5 条全拓、0 幸存、0 跳过**；锚点 5/5/0 stale；崩溃注入 **37 / 0 / 8**；安装器矩阵 21 / 0 / 0；变异 6 条 leg 基线全 rc=0、**35/35 拓到、1 跳过、零 SETUP**。详见 [REPORT-v0.17.5.md](REPORT-v0.17.5.md)。
+
 ## 0.17.4 — 2026-07-30
 
 两份外部审计合并整改。**三条生产缺陷先复现为红再改**，其中一条会把用户的文件搬到仓库外并报成功。

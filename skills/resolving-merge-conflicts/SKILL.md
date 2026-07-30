@@ -149,84 +149,67 @@ Run every command below and **read what it printed**. Two shapes account for eve
    # which is why step 3 asks for it.
    #   : > "$G/lean-park-input"
    #   printf '%s\0' 'each/path/from/step 4' >> "$G/lean-park-input"
-   # Validate before creating anything: a list written with '\n' instead of '\0'
-   # is not empty, so `-s` passes, every `read -d ''` below then reads nothing,
-   # and the whole block runs to completion having parked not one file.
-   # Every check on the list happens here, before a name is chosen, a
-   # directory is made or a state file is published - because a `die` after
-   # any of those leaves an open parking area that the next run refuses to
-   # step over ("an unfinished parking is still open"), and clearing it by
-   # the message's own advice takes the input list with it. 0.17.2's rule -
-   # publish the state before the first move - is about *moves*; nothing here
-   # moves anything, so reading first costs nothing and strands nothing.
+   # Everything below the split is read-only until the split says there is
+   # tracked work to move: a `die` after a state file is published leaves an
+   # open parking area the next run refuses to step over.
    [ -s "$G/lean-park-input" ] || die "no input list"
    [ "$(tail -c 1 -- "$G/lean-park-input" | tr -d -c '\000' | wc -c)" -eq 1 ] ||
      die "input list is not NUL-terminated - build it with printf '%s\\0'"
+   # Split, and *say* what is being left alone. Untracked work is not moved:
+   # measured, leaving it in place cannot lose it - if a commit still to be
+   # replayed would create that path, git refuses the whole step by name
+   # ("The following untracked working tree files would be overwritten"), the
+   # operation stays exactly where it is and the file is untouched. Moving it
+   # pre-empted a refusal that was already safe, specific and reversible, and
+   # cost this skill an mv loop, a manifest, a collision guard and a parent
+   # walk. Step 8 says what to do when that refusal appears.
+   TRACKED="$G/lean-park-tracked.tmp"; : > "$TRACKED" || die "cannot start a list"
+   LEFT=
    while IFS= read -r -d '' p; do
-     # A directory here means step 3 read a collapsed `notes/` entry. Parking
-     # one nests the work a level deeper on the way back, so refuse rather
-     # than guess. `-L` first: POSIX `test -d` follows a symlink, so a leaf
-     # that is a link *to* a directory answers true to `-d` and is exactly
-     # what the contract above says an entry may be.
-     #
-     # Defence in depth, and the suite does not prove it independently: with
-     # step 3 asking for `--untracked-files=all` a legal list holds no
-     # directory, so this branch is unreachable from any input the tests can
-     # build. Said plainly rather than given a case that cannot fail.
-     case "$p" in */) die "input list holds a directory, not a file: $p" ;; esac
-     [ -L "$p" ] || [ ! -d "$p" ] || die "input list holds a directory, not a file: $p"
+     if git ls-files --error-unmatch -z -- ":(literal,top)$p" >/dev/null 2>&1
+     then printf '%s\0' "$p" >> "$TRACKED" || die "cannot record $p"
+     else LEFT="$LEFT  $p
+   "
+     fi
    done < "$G/lean-park-input"
+   [ -z "$LEFT" ] || printf 'park: left in place, untracked and untouched:\n%s' "$LEFT"
+   if [ ! -s "$TRACKED" ]; then
+     rm -f -- "$TRACKED"
+     rm -f -- "$G/lean-park-input"
+     echo "park: no tracked work to move; nothing was parked and no state was written"
+     exit 0
+   fi
    PARK_NAME="lean-parked-$(date +%s)-$$"
    PARK="$G/$PARK_NAME"
    [ ! -e "$PARK" ] || die "name collision: $PARK"
-   mkdir -p -- "$PARK/untracked" || die "cannot create $PARK"
-   # Publish the state *before* the first move, not after the last one. A move
+   mkdir -p -- "$PARK" || die "cannot create $PARK"
+   # Publish the state *before* the first change to the working tree. A step
    # that fails partway - and a crash, which no rollback code can catch - would
-   # otherwise leave the user's files inside $PARK with nothing pointing at it,
-   # and restore refuses to look for a parking area it was not told about.
+   # otherwise leave the patch inside $PARK with nothing pointing at it, and
+   # restore refuses to look for a parking area it was not told about.
    printf '%s\n' "$PARK_NAME" > "$STATE.tmp" || die "cannot write state"
    mv -- "$STATE.tmp" "$STATE" || die "cannot publish state"
+   mv -- "$TRACKED" "$PARK/tracked" || die "cannot take the tracked list"
    mv -- "$G/lean-park-input" "$PARK/input" || die "cannot take the input list"
-   : > "$PARK/tracked"; : > "$PARK/untracked.list"; : > "$PARK/manifest"
-   while IFS= read -r -d '' p; do
-     if git ls-files --error-unmatch -z -- ":(literal,top)$p" >/dev/null 2>&1
-     then printf '%s\0' "$p" >> "$PARK/tracked"      || die "cannot record $p"
-     else printf '%s\0' "$p" >> "$PARK/untracked.list" || die "cannot record $p"
-     fi
-   done < "$PARK/input"
    # NUL all the way into git: `xargs -a` is a GNU extension that BSD/macOS
-   # xargs rejects outright, and the newline-joined `$(...)` this replaced was
-   # split on whitespace by the shell, so a tracked path with a space in it
-   # silently never reached the patch.
+   # xargs rejects outright, and a newline-joined `$(...)` would be split on
+   # whitespace by the shell, so a tracked path with a space in it would
+   # silently never reach the patch.
    : > "$PARK/specs"
    while IFS= read -r -d '' p; do
      printf ':(literal,top)%s\0' "$p" >> "$PARK/specs" || die "cannot build pathspecs"
-   done < "$PARK/input"
+   done < "$PARK/tracked"
    # xargs runs the command once even when its input is empty, and `git diff
-   # --binary --` with no pathspec diffs the *entire tree* - the patch would
-   # then carry files the user never named. (`-r` fixes this only on GNU.)
-   #
-   # These two are defence in depth, and the test suite does not prove them
-   # independently: with the NUL check above in place, a well-formed list
-   # always produces one spec per entry, so neither branch is reachable from a
-   # legal input. A case that cannot fail proves nothing, so rather than
-   # fabricate one, this says plainly what they are - a second line of defence
-   # if the loop above is ever changed, not an independently tested contract.
-   [ -s "$PARK/specs" ] || die "no pathspecs built from the input list"
-   [ "$(tr -d -c '\000' < "$PARK/specs" | wc -c)" -eq "$(tr -d -c '\000' < "$PARK/input" | wc -c)" ] ||
-     die "built fewer pathspecs than the input list holds"
+   # --binary --` with no pathspec diffs the *entire tree*. Defence in depth:
+   # the split above already guarantees a non-empty tracked list, so neither
+   # branch is reachable from a legal input, and the suite does not prove them.
+   [ -s "$PARK/specs" ] || die "no pathspecs built from the tracked list"
+   [ "$(tr -d -c '\000' < "$PARK/specs" | wc -c)" -eq "$(tr -d -c '\000' < "$PARK/tracked" | wc -c)" ] ||
+     die "built fewer pathspecs than the tracked list holds"
    xargs -0 git diff --binary -- < "$PARK/specs" > "$PARK/tracked.patch" || die "git diff failed"
    while IFS= read -r -d '' p; do
      git checkout -- ":(literal,top)$p" || die "cannot restore $p from the index"
    done < "$PARK/tracked"
-   while IFS= read -r -d '' p; do
-     # not `dirname -- "$p"`: BSD dirname takes no options, so the `--` that
-     # protects a name like -draft.txt on GNU becomes the argument on macOS
-     case "$p" in */*) d=${p%/*} ;; *) d=. ;; esac
-     mkdir -p -- "$PARK/untracked/$d" || die "cannot make a home for $p"
-     mv -- "$p" "$PARK/untracked/$p" || die "cannot park $p (already parked: $(tr -d -c '\000' < "$PARK/manifest" | wc -c))"
-     printf '%s\0' "$p" >> "$PARK/manifest" || die "parked $p but could not record it"
-   done < "$PARK/untracked.list"
    ```
 
    **`git checkout --` takes tracked paths only, and so does everything else that reads a pathspec.** This is the rule, not the instance: **any git command given a pathspec it does not recognise rejects the whole command** (`error: pathspec ... did not match any file(s) known to git`, exit 1) rather than skipping that one path. It has now bitten `git restore --staged`, `git stash push`, `git checkout --` and `git restore --staged` again on the way back. `git diff` is the one exception — it ignores paths it does not know, which is why the patch line above can name them all.
@@ -265,54 +248,10 @@ Run every command below and **read what it printed**. Two shapes account for eve
        git restore --staged -- ":(literal,top)$p" || die "cannot unstage $p"
      done < "$PARK/tracked"
    fi
-   # The parking area itself is the record - not the manifest. The manifest is
-   # written *after* each move, so a crash in that window leaves a file parked
-   # and unlisted, and a restore that reads the manifest walks straight past
-   # it. Measured: SIGKILL between the mv and the manifest write left the file
-   # in the parking area, gone from the worktree, and restore still exited 0.
-   # Reversing the two only moves the window - then the manifest can name a
-   # file that was never moved. Reading the directory has no window at all.
-   find "$PARK/untracked" -mindepth 1 ! -type d -print0 > "$PARK/present" 2>/dev/null || :
-   TOP="$(pwd -P)" || die "cannot resolve the worktree root"
-   while IFS= read -r -d '' src; do
-     p=${src#"$PARK/untracked/"}
-     if [ -e "$p" ] || [ -L "$p" ]; then HELD=1; continue; fi
-     # Walk every parent, not just the leaf. The operation may have created a
-     # parent as a symlink pointing out of the repository - `mkdir -p` and `mv`
-     # both follow it, so the leaf check passes and the file lands outside,
-     # with the parking area cleaned up as a success. Measured on POSIX and on
-     # Windows with `mklink /D`. There is no no-follow primitive in POSIX sh,
-     # so a symlink swapped in between this check and the move would still win;
-     # for a single user driving one local repository that race is accepted,
-     # and the physical-path check below is what catches it if it happens.
-     blocked=
-     probe=
-     rest=$p
-     while [ "$rest" != "${rest#*/}" ]; do
-       seg=${rest%%/*}; rest=${rest#*/}
-       probe=${probe:+$probe/}$seg
-       if [ -L "$probe" ]; then blocked="$probe is a symlink"; break; fi
-       if [ -e "$probe" ] && [ ! -d "$probe" ]; then blocked="$probe is not a directory"; break; fi
-     done
-     if [ -n "$blocked" ]; then HELD=1; continue; fi
-     case "$p" in */*) d=${p%/*} ;; *) d=. ;; esac   # not dirname: see park
-     mkdir -p -- "$d" || die "cannot make a home for $p"
-     mv -- "$src" "$p" || die "cannot put $p back"
-     # ...and confirm where it actually landed, which is the only check that
-     # survives a symlink swapped in after the walk above.
-     LANDED="$(cd -- "$d" 2>/dev/null && pwd -P)" || LANDED=
-     case "$LANDED" in
-       "$TOP"|"$TOP"/*) : ;;
-       *) mv -- "$p" "$src" || die "$p landed outside the worktree at ${LANDED:-unresolvable} and would not come back"
-          HELD=1 ;;
-     esac
-   done < "$PARK/present"
-   # `-quit` is not in every find; one line of output is all this needs
-   LEFT="$(find "$PARK/untracked" -mindepth 1 ! -type d -print 2>/dev/null | head -n 1)"
-   if [ "$HELD" -eq 0 ] && [ -z "$LEFT" ]; then
+   if [ "$HELD" -eq 0 ]; then
      rm -f -- "$STATE" && rm -rf -- "$PARK"
    else
-     echo "kept $PARK - tell the user what is in it; $STATE still points at it"
+     echo "kept $PARK - the patch is still in it; tell the user the path before you go on"
    fi
    ```
 

@@ -1,0 +1,1 @@
+Code review came back on fetcher.py. The feedback is in review.md. Please address it.

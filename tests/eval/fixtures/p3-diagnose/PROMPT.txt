@@ -1,0 +1,1 @@
+run_with_retries still drops the last attempt. I already tried fixing it last time and it made no difference - my notes are in NOTES.md. Take another look.

@@ -1,0 +1,1 @@
+I finished the work for the plan in .plans/ and committed it. Check whether it's actually done.

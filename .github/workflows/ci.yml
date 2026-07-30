@@ -896,7 +896,7 @@ jobs:
           # combined test can fail without failing the step
           test -s "$RUNNER_TEMP/mc-cmds.txt"
           test -s "$RUNNER_TEMP/sr-cmds.txt"
-          for want in 'merge-base --all HEAD <that head>' 'REBASE_HEAD^<n> REBASE_HEAD'                       'CHERRY_PICK_HEAD^<n> CHERRY_PICK_HEAD' 'REVERT_HEAD^<n> REVERT_HEAD'                       'rev-list --parents -n 1' 'show-toplevel' 'git diff --binary --' 'git apply --3way' 'git checkout -- ":(literal,top)$p"' 'git restore --staged -- ":(literal,top)$p"' 'done < "$PARK/tracked"' 'done < "$PARK/untracked.list"' 'done < "$PARK/present"' 'find "$PARK/untracked" -mindepth 1 ! -type d -print0' 'name-status -M' 'MERGE_HEAD"'                       'hash-object -t tree'; do
+          for want in 'merge-base --all HEAD <that head>' 'REBASE_HEAD^<n> REBASE_HEAD'                       'CHERRY_PICK_HEAD^<n> CHERRY_PICK_HEAD' 'REVERT_HEAD^<n> REVERT_HEAD'                       'rev-list --parents -n 1' 'show-toplevel' 'git diff --binary --' 'git apply --3way' 'git checkout -- ":(literal,top)$p"' 'git restore --staged -- ":(literal,top)$p"' 'done < "$PARK/tracked"' 'done < "$G/lean-park-input"' 'left in place, untracked and untouched' 'name-status -M' 'MERGE_HEAD"'                       'hash-object -t tree'; do
             grep -qF "$want" "$RUNNER_TEMP/mc-cmds.txt" || { echo "not prescribed in a code block: $want"; exit 1; }
           done
           for want in 'cat-file -e' 'refs/heads/<default>:refs/remotes/origin/<default>' 'ls-remote --symref'; do
@@ -948,7 +948,7 @@ jobs:
           # prompted this check
           # each of these was verified to match v0.17.0's recipe and not this one;
           # a pattern that matches neither is a dead assertion and does not belong
-          for gnuism in 'xargs( +-[^ ]+)* +-a\b' 'dirname +--' '-print +-quit'; do
+          for gnuism in 'xargs( +-[^ ]+)* +-a\b' 'dirname +--'; do
             if grep -qE -- "$gnuism" "$RUNNER_TEMP/mc-code.txt"; then
               echo "the recipe matches /$gnuism/, which is not portable to BSD/macOS:"
               grep -nE -- "$gnuism" "$RUNNER_TEMP/mc-code.txt"; exit 1
@@ -1094,8 +1094,8 @@ jobs:
             || { echo "the parking matrix skipped cases; on this platform none may be"; exit 1; }
           # ...and the count itself, so a case that quietly stops being generated
           # cannot hide inside "0 failed"
-          grep -qE '^45 passed, 0 failed, 0 skipped' "$RUNNER_TEMP/pm.log" \
-            || { echo "expected 45 parking cases; the matrix shrank or grew"; exit 1; }
+          grep -qE '^42 passed, 0 failed, 0 skipped' "$RUNNER_TEMP/pm.log" \
+            || { echo "expected 42 parking cases; the matrix shrank or grew"; exit 1; }
           # ...and the cases that carry the awkward names by name, because a count
           # stays right while a case quietly turns into a duplicate of an easy one.
           # These are exactly the ones a broken capability probe drops first.
@@ -1113,14 +1113,15 @@ jobs:
           # rescued work with it, that a parent turned symlink cannot move a file
           # out of the repository, and that a leaf which is a link to a directory is
           # parked rather than mistaken for one.
-          for c in "park fails partway" "glob name beside a conflicted file" "input list is not NUL-separated" "abandoned after parking" "untracked directory via step 3's own command" "parent became a symlink out of the repository" "leaf is a symlink to a directory"; do
+          for c in "glob name beside a conflicted file" "input list is not NUL-separated" "abandoned after parking" "untracked directory via step 3's own command"; do
             grep -qxF "  ok    $c" "$RUNNER_TEMP/pm.log" \
               || { echo "the parking matrix never passed the case '$c'"; exit 1; }
           done
           # ...and a recipe that used to be broken must still be caught, or the
           # matrix has stopped discriminating. v0.17.0 built its pathspecs with
           # `xargs -a` (which BSD xargs rejects) and joined them with an unquoted
-          # $(...) (which splits a tracked path on its spaces).
+          # $(...) (which splits a tracked path on its spaces). Both faults are on
+          # the tracked side, which 0.17.5 kept, so this fixture still bites.
           for old in v0.17.0; do
             git show "$old:skills/resolving-merge-conflicts/SKILL.md" > "$RUNNER_TEMP/old-$old.md" 2>/dev/null || continue
             if bash tests/parking_matrix.sh "$RUNNER_TEMP/old-$old.md" >/dev/null 2>&1; then
@@ -1138,7 +1139,7 @@ jobs:
           # SIGKILL because a catchable signal would be eaten by a trap, and a
           # clean early exit would run handlers a crash never runs.
           bash tests/parking_crash.sh | tee "$RUNNER_TEMP/crash.log"
-          grep -qE '^[0-9]+ passed, 0 failed' "$RUNNER_TEMP/crash.log" \
+          grep -qE '^[0-9]+ passed, 0 failed, [0-9]+ skipped' "$RUNNER_TEMP/crash.log" \
             || { echo "the crash suite reported failures"; exit 1; }
           # It must also be able to fail, or a broken extractor would report a
           # clean sweep of nothing. v0.17.2's restore reads $PARK/manifest,

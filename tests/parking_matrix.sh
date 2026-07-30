@@ -168,24 +168,34 @@ run_case() {          # $1 state  $2 root|sub
     runfrom="$d"; [ "$where" = sub ] && runfrom="$d/sub"
     parked=0
     if [ "$RUNNABLE" -eq 1 ] && [ -s "$g/lean-park-input" ]; then
-      parked=1
       # ---- process A: park -------------------------------------------------
       ( cd "$runfrom" && . "$WORK/park.sh" ) || exit 21
       st="$d/.git/lean-parked.state"
-      [ -s "$st" ] || { echo "park left no state file" >&2; exit 22; }
-      pk="$d/.git/$(cat "$st")"
-      # everything it recorded must already be out of the worktree
-      while IFS= read -r -d '' p; do
-        if [ -e "$d/$p" ] || [ -L "$d/$p" ]; then echo "still present after park: $p" >&2; exit 23; fi
-      done < "$pk/manifest"
-      # ...and every tracked path it claimed must be clean in the worktree now.
-      # Without this a path the recipe silently failed to touch looks identical
-      # before and after, and the round-trip passes having done nothing.
-      while IFS= read -r -d '' p; do
-        if [ -n "$(cd "$d" && git status --porcelain -- ":(literal,top)$p")" ]; then
-          echo "tracked path not parked: $p" >&2; exit 31
-        fi
-      done < "$pk/tracked"
+      if [ -s "$st" ]; then
+        parked=1
+        pk="$d/.git/$(cat "$st")"
+        # every tracked path it claimed must be clean in the worktree now.
+        # Without this a path the recipe silently failed to touch looks identical
+        # before and after, and the round-trip passes having done nothing.
+        while IFS= read -r -d '' p; do
+          if [ -n "$(cd "$d" && git status --porcelain -- ":(literal,top)$p")" ]; then
+            echo "tracked path not parked: $p" >&2; exit 31
+          fi
+        done < "$pk/tracked"
+      else
+        # No state is the correct answer when the in-flight work is entirely
+        # untracked: since 0.17.5 the recipe reports those paths and leaves them
+        # alone, so there is nothing to park and nothing to point at. What it
+        # must not do is leave a parking area behind without a pointer.
+        [ -z "$(find "$d/.git" -maxdepth 1 -name 'lean-parked-*')" ] \
+          || { echo "park left an area with no state file" >&2; exit 22; }
+        # ...and the untracked work must still be exactly where the user left it
+        while IFS= read -r -d '' p; do
+          if git -C "$d" ls-files --error-unmatch -z -- ":(literal,top)$p" >/dev/null 2>&1; then continue; fi
+          { [ -e "$d/$p" ] || [ -L "$d/$p" ]; } \
+            || { echo "untracked path went missing though nothing parked it: $p" >&2; exit 23; }
+        done < "$g/lean-park-input"
+      fi
     else
       rm -f "$g/lean-park-input"
     fi
@@ -199,7 +209,28 @@ run_case() {          # $1 state  $2 root|sub
         if [ -n "$(git diff --name-only --diff-filter=U)" ]; then printf 'RES%s\n' "$n" > f.txt; git add f.txt; fi
         GIT_EDITOR=true git rebase --continue >/dev/null 2>&1
       done ) || true
-    if [ -d "$d/.git/rebase-merge" ] || [ -d "$d/.git/rebase-apply" ]; then
+    if [ "$state" = clash ]; then
+      # The whole point of this case since 0.17.5: the untracked path the
+      # operation is about to create is left where the user put it, so
+      # `--continue` refuses by name and the rebase stalls. That is the
+      # designed outcome, not a failure - assert it, then show the documented
+      # way out actually works.
+      { [ -d "$d/.git/rebase-merge" ] || [ -d "$d/.git/rebase-apply" ]; } \
+        || { echo "the collision did not stall the rebase" >&2; exit 24; }
+      [ -e ren-new.txt ] || { echo "the user's copy disappeared" >&2; exit 29; }
+      mv -- ren-new.txt ren-new.txt.mine || exit 29
+      ( cd "$d"
+        n=0
+        while [ $n -lt 12 ]; do
+          gg=$(git rev-parse --git-dir)
+          [ -d "$gg/rebase-merge" ] || [ -d "$gg/rebase-apply" ] || break
+          n=$((n+1))
+          if [ -n "$(git diff --name-only --diff-filter=U)" ]; then printf 'RES%s\n' "$n" > f.txt; git add f.txt; fi
+          GIT_EDITOR=true git rebase --continue >/dev/null 2>&1
+        done ) || true
+      { [ -d "$d/.git/rebase-merge" ] || [ -d "$d/.git/rebase-apply" ]; } \
+        && { echo "moving the file aside did not unblock the rebase" >&2; exit 24; }
+    elif [ -d "$d/.git/rebase-merge" ] || [ -d "$d/.git/rebase-apply" ]; then
       echo "rebase never finished (state=$state)" >&2; exit 24
     fi
     # ---- process C: restore, with nothing carried over --------------------
@@ -208,10 +239,11 @@ run_case() {          # $1 state  $2 root|sub
     fi
 
     if [ "$state" = clash ]; then
-      [ "$(cat ren-new.txt)" = "made-by-rebase" ] || { echo "the operation's file was overwritten" >&2; exit 28; }
-      pk=$(find "$d/.git" -maxdepth 1 -name 'lean-parked-*' -type d | head -1)
-      { [ -n "$pk" ] && [ -f "$pk/untracked/ren-new.txt" ]; } || { echo "the user's copy was not preserved" >&2; exit 29; }
-      [ -s "$d/.git/lean-parked.state" ] || { echo "state dropped while work is held" >&2; exit 30; }
+      [ "$(cat ren-new.txt)" = "made-by-rebase" ] \
+        || { echo "the operation's file is not the one in the tree" >&2; exit 28; }
+      [ -e ren-new.txt.mine ] || { echo "the user's copy was lost" >&2; exit 29; }
+      [ -z "$(find "$d/.git" -maxdepth 1 -name 'lean-parked-*')" ] \
+        || { echo "a parking area was created for untracked work" >&2; exit 30; }
     else
       after=$(snapshot | grep -v '^\(UU\|M \|MM\) f\.txt$' | grep -v '^\./f\.txt ')
       want=$(printf '%s\n' "$before" | grep -v '^\(UU\|M \|MM\) f\.txt$' | grep -v '^\./f\.txt ')
@@ -249,62 +281,6 @@ else
   skipped 2 "newlinepath, root and sub (this filesystem cannot hold a newline in a name)"
 fi
 
-# ---- park fails partway through the untracked moves ----------------------
-partial_case() {
-  d="$WORK/partial"
-  ( set -u
-    make_repo "$d" >/dev/null 2>&1
-    printf 'wip\n' > one.txt; printf 'wip\n' > two.txt; printf 'wip\n' > three.txt
-    printf 'RES0\n' > f.txt; git add f.txt
-    before=$(snapshot)
-    write_input
-    # The shim lives outside the repo. Inside it, the test's own tooling shows up
-    # as untracked work in the very tree it is about to compare - a test that
-    # contaminates its subject cannot answer the question it is asking.
-    pbin="$WORK/partial-bin"; mkdir -p "$pbin"
-    real_mv=$(command -v mv)
-    { printf '#!/bin/sh\n'
-      printf 'for a in "$@"; do case "$a" in */untracked/two.txt) echo "mv: injected" >&2; exit 1 ;; esac; done\n'
-      printf 'exec %s "$@"\n' "$real_mv"; } > "$pbin/mv"
-    chmod +x "$pbin/mv"
-    OLD_PATH=$PATH; PATH="$pbin:$PATH"
-    [ "$(command -v mv)" = "$pbin/mv" ] || { PATH=$OLD_PATH; echo "shim not on PATH" >&2; exit 41; }
-    ( cd "$d" && . "$WORK/park.sh" ) >/dev/null 2>&1
-    prc=$?
-    PATH=$OLD_PATH
-    [ "$prc" -ne 0 ] || { echo "park returned 0 after a failed move" >&2; exit 42; }
-    # whatever it claims to have parked must actually be there
-    pk=$(find "$d/.git" -maxdepth 1 -name 'lean-parked-*' -type d | head -1)
-    [ -n "$pk" ] || { echo "no parking area at all" >&2; exit 43; }
-    while IFS= read -r -d '' q; do
-      [ -e "$pk/untracked/$q" ] || { echo "manifest names $q but it is not parked" >&2; exit 44; }
-      if [ -e "$d/$q" ]; then echo "manifest names $q but it is also still in the tree" >&2; exit 45; fi
-    done < "$pk/manifest"
-    # the file whose move failed must still be where the user left it
-    [ -f "$d/two.txt" ] || { echo "two.txt was lost by the failed move" >&2; exit 46; }
-    # Everything above only says the wreck is self-consistent. What the user
-    # needs is their work back, and that is a different claim: the parking area
-    # has to be findable, and restore has to hand it over. Without this the case
-    # passes on a state where the files exist but nothing can reach them.
-    [ -s "$d/.git/lean-parked.state" ] || {
-      echo "park failed leaving $pk with nothing pointing at it" >&2; exit 47; }
-    ( cd "$d" && env -u PARK -u PARK_NAME -u G -u STATE bash "$WORK/restore.sh" ) >/dev/null 2>&1 \
-      || { echo "restore would not recover a half-finished parking" >&2; exit 48; }
-    after=$(snapshot)
-    if [ "$after" != "$before" ]; then
-      echo "the tree did not come back to what it was before parking" >&2
-      diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") | head -8 >&2
-      exit 49
-    fi
-    [ -z "$(find "$d/.git" -maxdepth 1 -name 'lean-parked-*')" ] \
-      || { echo "the parking area outlived a successful recovery" >&2; exit 50; }
-    [ ! -e "$d/.git/lean-parked.state" ] \
-      || { echo "the state file outlived a successful recovery" >&2; exit 51; }
-  ) 2>"$WORK/err.partial"
-  rc=$?
-  report "park fails partway" "$rc" "rc=$rc $(head -2 "$WORK/err.partial" | tr '\n' ' ')"
-}
-[ "$RUNNABLE" -eq 1 ] && partial_case
 
 # ---- a parked name that is also a glob, beside a conflicted file ----------
 # :(literal) is not decoration, but proving that needs the one arrangement in
@@ -419,7 +395,7 @@ abandon_case() {
     make_repo "$d" >/dev/null 2>&1
     apply_state mixed
     want_tracked=$(git hash-object tracked.txt)
-    want_new=$(git hash-object brandnew.txt)
+    want_new=$(git hash-object brandnew.txt)   # untracked: never parked, must simply stay put
     printf 'RES0\n' > f.txt; git add f.txt
     write_input
     ( cd "$d" && . "$WORK/park.sh" ) || exit 31
@@ -427,8 +403,8 @@ abandon_case() {
     git rebase --abort >/dev/null 2>&1            # the user changes their mind
     [ -d "$pk" ] || { echo "the parking area did not survive the abort" >&2; exit 32; }
     [ -s "$pk/tracked.patch" ] || { echo "the patch is gone" >&2; exit 33; }
-    [ "$(git hash-object "$pk/untracked/brandnew.txt")" = "$want_new" ] \
-      || { echo "the untracked bytes did not survive" >&2; exit 34; }
+    [ "$(git hash-object brandnew.txt)" = "$want_new" ] \
+      || { echo "the untracked file did not survive the abort in place" >&2; exit 34; }
     git apply --3way "$pk/tracked.patch" >/dev/null 2>&1 || exit 35
     [ "$(git hash-object tracked.txt)" = "$want_tracked" ] \
       || { echo "the tracked change did not come back" >&2; exit 36; }
@@ -469,21 +445,18 @@ untracked_dir_case() {
     done
     [ -s "$g/lean-park-input" ] || { echo "step 3 produced no list" >&2; exit 61; }
     tr -d -c '\000' < "$g/lean-park-input" | wc -c | grep -qv '^ *0$' || exit 61
-    ( cd "$d" && . "$WORK/park.sh" ) || exit 62
-    ( cd "$d"
-      n=0
-      while [ $n -lt 12 ]; do
-        gg=$(git rev-parse --git-dir)
-        [ -d "$gg/rebase-merge" ] || [ -d "$gg/rebase-apply" ] || break
-        n=$((n+1))
-        if [ -n "$(git diff --name-only --diff-filter=U)" ]; then printf 'RES%s\n' "$n" > f.txt; git add f.txt; fi
-        GIT_EDITOR=true git rebase --continue >/dev/null 2>&1
-      done ) || true
-    ( cd "$d" && env -u PARK -u PARK_NAME -u G -u STATE bash "$WORK/restore.sh" ) || exit 63
-    [ -f notes/sub/file.txt ] || { echo "the file did not come back to notes/sub/file.txt" >&2; exit 64; }
+    ( cd "$d" && . "$WORK/park.sh" ) >"$WORK/out.untrackeddir" 2>&1 || exit 62
+    # Nothing is moved and nothing is parked - the recipe reports the path and
+    # leaves it. What it must never do is invent notes/notes by treating a
+    # collapsed directory entry as a file.
+    grep -q 'notes/sub/file.txt' "$WORK/out.untrackeddir" \
+      || { echo "park did not report the untracked path it left alone" >&2; exit 63; }
+    [ -z "$(find "$d/.git" -maxdepth 1 -name 'lean-parked-*')" ] \
+      || { echo "a parking area was created for untracked work" >&2; exit 62; }
+    [ -f notes/sub/file.txt ] || { echo "the file did not stay put" >&2; exit 64; }
     [ "$(git hash-object notes/sub/file.txt)" = "$want" ] \
       || { echo "the bytes changed" >&2; exit 65; }
-    [ ! -e notes/notes ] || { echo "restored one level too deep: notes/notes exists" >&2; exit 66; }
+    [ ! -e notes/notes ] || { echo "the recipe invented notes/notes" >&2; exit 66; }
     # f.txt is the conflict itself: it is UU before and resolved after, so it is
     # filtered here exactly as run_case filters it.
     after=$(snapshot   | grep -v '^\(UU\|M \|MM\) f\.txt$' | grep -v '^\./f\.txt ')
@@ -503,102 +476,7 @@ untracked_dir_case() {
 }
 [ "$RUNNABLE" -eq 1 ] && untracked_dir_case
 
-# ---- a parent that became a symlink out of the repository ----------------
-# restore checked only the leaf, so a parent the operation created as a symlink
-# pointing outside was followed by mkdir -p and mv: the file left the repository
-# and the parking area was cleaned up as a success. Measured on POSIX and on
-# Windows with `mklink /D`.
-external_parent_case() {
-  if [ "$SYMLINKS" -ne 1 ]; then
-    skipped 1 "external symlink parent (this platform makes copies, not links)"
-    return 0
-  fi
-  d="$WORK/extparent"
-  ( set -u
-    make_repo "$d" >/dev/null 2>&1
-    mkdir -p dir; printf 'SECRET USER WORK\n' > dir/file.txt
-    want=$(git hash-object dir/file.txt)
-    printf 'RES0\n' > f.txt; git add f.txt
-    g=$(git rev-parse --git-dir); : > "$g/lean-park-input"
-    printf '%s\0' 'dir/file.txt' >> "$g/lean-park-input"
-    ( cd "$d" && . "$WORK/park.sh" ) || exit 71
-    pk="$d/.git/$(cat "$d/.git/lean-parked.state")"
-    outside="$WORK/extparent-outside"; rm -rf "$outside"; mkdir -p "$outside"
-    rm -rf dir
-    if ! ln -s "$outside" dir; then echo "could not stage the symlink" >&2; exit 72; fi
-    ( cd "$d" && env -u PARK -u PARK_NAME -u G -u STATE bash "$WORK/restore.sh" ) || exit 73
-    [ ! -e "$outside/file.txt" ] \
-      || { echo "the file was moved outside the repository" >&2; exit 74; }
-    [ -d "$pk" ] || { echo "the parking area was cleaned up over a blocked path" >&2; exit 75; }
-    [ -s "$d/.git/lean-parked.state" ] \
-      || { echo "the state file was dropped while work is still held" >&2; exit 76; }
-    [ "$(git hash-object "$pk/untracked/dir/file.txt")" = "$want" ] \
-      || { echo "the held bytes changed" >&2; exit 77; }
-  ) 2>"$WORK/err.extparent"
-  rc=$?
-  report "parent became a symlink out of the repository" "$rc" \
-    "rc=$rc $(grep -vE '^warning:' "$WORK/err.extparent" | head -2 | tr '\n' ' ')"
-}
-[ "$RUNNABLE" -eq 1 ] && external_parent_case
 
-# ---- a leaf that is a symlink *to a directory* ---------------------------
-# POSIX `test -d` follows a symlink, so a link pointing at a directory answers
-# true to `-d` - which the entry guard read as "this is a directory, refuse".
-# The input contract says an entry may be a symlink, so that was the guard
-# breaking its own contract, and it died *after* the state file was published:
-# the parking area stayed open, every later park hit "an unfinished parking is
-# still open", and clearing it by the message's own advice took the input list
-# with it. The existing symlink states only use links to files and to nowhere,
-# so 44/0/0 said nothing about this one.
-dirlink_case() {
-  if [ "$SYMLINKS" -ne 1 ]; then
-    skipped 1 "symlink to a directory (this platform makes copies, not links)"
-    return 0
-  fi
-  d="$WORK/dirlink"
-  ( set -u
-    make_repo "$d" >/dev/null 2>&1
-    mkdir -p target/inside
-    printf 'inside\n' > target/inside/thing.txt
-    ln -s target userdirlink
-    [ -L userdirlink ] || { echo "the fixture made a copy, not a link" >&2; exit 81; }
-    want=$(readlink userdirlink)
-    before=$(snapshot)
-    printf 'RES0\n' > f.txt; git add f.txt
-    write_input
-    ( cd "$d" && . "$WORK/park.sh" ) || exit 82
-    [ ! -e userdirlink ] && [ ! -L userdirlink ] \
-      || { echo "the link is still in the tree after parking" >&2; exit 83; }
-    ( cd "$d"
-      n=0
-      while [ $n -lt 12 ]; do
-        gg=$(git rev-parse --git-dir)
-        [ -d "$gg/rebase-merge" ] || [ -d "$gg/rebase-apply" ] || break
-        n=$((n+1))
-        if [ -n "$(git diff --name-only --diff-filter=U)" ]; then printf 'RES%s\n' "$n" > f.txt; git add f.txt; fi
-        GIT_EDITOR=true git rebase --continue >/dev/null 2>&1
-      done ) || true
-    ( cd "$d" && env -u PARK -u PARK_NAME -u G -u STATE bash "$WORK/restore.sh" ) || exit 84
-    [ -L userdirlink ] || { echo "the link did not come back as a link" >&2; exit 85; }
-    [ "$(readlink userdirlink)" = "$want" ] \
-      || { echo "the link target changed: $(readlink userdirlink) want $want" >&2; exit 86; }
-    [ -z "$(find "$d/.git" -maxdepth 1 -name 'lean-parked-*')" ] \
-      || { echo "the parking area outlived a clean restore" >&2; exit 87; }
-    [ ! -e "$d/.git/lean-parked.state" ] \
-      || { echo "the state file outlived a clean restore" >&2; exit 88; }
-    after=$(snapshot   | grep -v '^\(UU\|M \|MM\) f\.txt$' | grep -v '^\./f\.txt ')
-    want_tree=$(printf '%s\n' "$before" | grep -v '^\(UU\|M \|MM\) f\.txt$' | grep -v '^\./f\.txt ')
-    if [ "$after" != "$want_tree" ]; then
-      echo "the tree did not come back" >&2
-      diff <(printf '%s\n' "$want_tree") <(printf '%s\n' "$after") | head -6 >&2
-      exit 89
-    fi
-  ) 2>"$WORK/err.dirlink"
-  rc=$?
-  report "leaf is a symlink to a directory" "$rc" \
-    "rc=$rc $(grep -vE '^warning:' "$WORK/err.dirlink" | head -2 | tr '\n' ' ')"
-}
-[ "$RUNNABLE" -eq 1 ] && dirlink_case
 
 echo
 echo "$pass passed, $fail failed, $skip skipped"

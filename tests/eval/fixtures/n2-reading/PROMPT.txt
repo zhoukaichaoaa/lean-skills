@@ -1,0 +1,1 @@
+Read the files in this directory and tell me in three sentences what this program does. Don't change anything and don't run anything.
