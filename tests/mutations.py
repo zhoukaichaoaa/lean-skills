@@ -78,7 +78,15 @@ def run_leg(leg):
         body = s['run'].replace('python3 - ', py + ' - ')
         rt = os.path.join(work, '_rt')
         os.makedirs(rt, exist_ok=True)
-        env = dict(os.environ, RUNNER_TEMP=rt, MSYS=MSYS_LINKS)
+        # The work copy has no .git (see fresh(): copying the index would drag
+        # this repo's uncommitted state in and break the "tree is clean at the
+        # end" assertions). But the RED gates read their fixtures out of
+        # released tags, so tell tests/fixture.sh where the object store is.
+        # Without this they fail here for want of a repository - and before
+        # 0.17.7 they instead *skipped themselves*, so this leg's gates had
+        # never run either.
+        env = dict(os.environ, RUNNER_TEMP=rt, MSYS=MSYS_LINKS,
+                   LEAN_FIXTURE_REPO=REPO)
         env.pop('CLAUDE_SKILLS_DIR', None)
         if leg == 'win':
             path = os.path.join(work, '_leg.ps1')

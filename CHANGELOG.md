@@ -75,9 +75,82 @@ crash injection: 144 cases actually died (SIGKILL), 56 never reached the kill, 0
 
 顺带一个副作用值得记：这也是属性测试**第一次在 Windows 之外的平台上运行**。此前它只在作者本机跑过，而那正是 REPORT 里列出的最大覆盖缺口。RED 是确定性的（固定种子、固定靶版本），所以进 CI 不违反「随机的东西不进常规 CI」那条 —— 进去的是它的两个签名，不是那 200 例随机。
 
+### CI 上七处 RED 门闸从未真正执行过 —— 本批复活
+
+上一节刚把 RED 期望钉死，推上去，CI 就红了。红得比预期深得多。
+
+**铁证先摆出来。** 同一次 run 的 Windows 腿：
+
+```
+日志:   fatal: invalid object name 'v0.12.0'.
+结论:   success
+```
+
+`actions/checkout` 默认不取标签。每一处「拿旧版本当 fixture 验红」的门闸，`git show v0.17.2:…` 都失败了 —— **每一次 run，从引入那天起**。而它们的写法是：
+
+```
+git show "$old:path" > "$dest" 2>/dev/null || continue
+```
+
+`|| continue` 把「我够不到 fixture」翻译成了「没什么可查的」。七处门闸，一处都没跑过，每条腿照样绿。
+
+**PowerShell 那处更糟，是假阳性而不是跳过。** 它不查 `$LASTEXITCODE`，于是拿一个 **0 字节**的 `install.ps1` 去跑安装器矩阵；空脚本当然通不过矩阵，于是 `if (通过) { throw }` 不触发 —— 门闸报告一切正常，而它比对的是空气。实测：
+
+```
+git show v0.12.0:install.ps1   -> LASTEXITCODE=0,   11917 字节
+git show v9.9.9:install.ps1    -> LASTEXITCODE=128, 0 字节
+```
+
+**它是怎么暴露的：本批新加的一处门闸忘了写那个 `|| continue`。** 它硬失败、退出 128、把整条腿拖红，于是七处一起浮出水面。一张漏掉的安全网，掀开了全部漏掉的安全网。
+
+### 修法：让「忘记硬失败」结构性不可能
+
+不是逐处补 `|| exit 1`（那依赖每一处都记得，而这次正是一处忘了）。改成**唯一入口**：
+
+- 新增 `tests/fixture.sh` —— 取一个已发布标签里的文件，取不到就立刻死，并写明**是哪个门闸的 fixture 取不到**。它没有「继续」这个选项，所以没有东西可以忘。成功时打印一行 `fixture ok: <tag>:<path> -> <gate>`，那一行就是「这个门闸真的跑了」的日志证据 —— 否则沉默的门闸和不存在的门闸在日志里长得一模一样。
+- 七处门闸全部改走它（PowerShell 那处按同样契约内联：`$LASTEXITCODE` + 空文件检查 + 同样的 `fixture ok:` 输出）。
+- `actions/checkout` 加 `fetch-depth: 0`，标签这才够得到。
+- `fixture.sh` 进 shellcheck（`-s sh`）：它现在是七处门闸共同的单点，它坏了就一起哑。
+
+### 同一个洞的第二张面孔：`mutations.py` 里那些门闸也从未执行
+
+修完 CI 再跑变异套件，`imtx` 基线红了。不是改坏了，是同源：
+
+`fresh()` 用 `copytree(REPO, work, ignore=ignore_patterns('.git'))` —— **work 副本不是 git 仓库**。旧写法 `git show <tag>:… || continue` 在那里同样静默跳过，基线照绿。**所以变异套件里这些门闸也一次都没跑过**，和 CI 一模一样。是硬失败把它一并照了出来。
+
+`.git` 不能直接复制进去：那样 work 会变成一个带着本仓库未提交改动的仓库，而 `install.ps1` 那一步末尾有 `git status --porcelain` 的洁净断言，会连带弄红 `win` leg。
+
+所以改成显式来源：`fixture.sh` 读 `LEAN_FIXTURE_REPO`（默认 `.`）。CI 用默认值（checkout 自己就是对象库）；`run_leg` 把真实仓库路径注进去；PowerShell 那处同契约 `git -C $fxRepo show`。硬失败不变，失败消息多一行 `looked in: <repo>`。
+
+**「work 副本没有对象库」从一个能无声失效的地方，变成了一个必须显式配置的地方。**
+
+### 七处逐一验活（本机，CI 上会在各腿重跑）
+
+| # | 门闸 | fixture | 观察到的红 |
+|---|---|---|---|
+| 1 | shellcheck 必须拒绝 v0.17.0 的 park 块 | ok | shellcheck 拒绝 |
+| 2 | 停靠矩阵必须拒绝 v0.17.0 的配方 | ok | 35 passed, **7 failed** |
+| 3 | 崩溃套件必须对 v0.17.2 报**恰好 4 条具名** | ok | 35 / **4** / 2，line 30·31·69·mid-move 四名全中 |
+| 4 | 属性测试必须抓 v0.17.0 的词分割 | ok | 10 passed, **2 failed** + 文案对上 |
+| 5 | 属性测试必须抓 v0.17.2 的崩溃缺陷 | ok | 27 passed, **3 failed** + `held ./ünïcode.txt` 具名 |
+| 6 | 安装器矩阵必须拒绝 v0.12.0 / v0.13.1 的 install.sh | ok ×2 | 16/**5**/0 与 19/**2**/0 |
+| 7 | 安装器矩阵必须拒绝 v0.12.0 的 install.ps1（PS） | ok，11917 字节 | 见上（旧写法在此处是假阳性） |
+
+第 5 条还带绿对照：同一批种子在当前配方上必须绿，否则「什么都失败」的 harness 也能免费得到红。
+
+### 历史表述更正
+
+以下说法在写下时是意图，但**在 CI 上从未生效**，直到本批：
+
+- CHANGELOG 0.15.0 条目与 **v0.15.0 的 release notes**：「CI 不只跑当前矩阵，还断言 v0.12.0 与 v0.13.1 必须不通过」
+- CHANGELOG 0.13.x 条目：「CI 的 Windows 腿现在跑这套矩阵，并断言 v0.12.0 必须不通过」
+- CHANGELOG 0.17.0 条目：「停靠矩阵现在……要求旧版本必须仍然失败：拿 v0.17.0 的 SKILL.md 跑矩阵，能过就报错」
+
+历史条目的原文不改 —— 它们记录的是当时的判断，改掉会抹去这次失败本身。更正记在这里：那些断言当时确实写进了 CI，但因为标签取不到而全部空转；**自 0.17.7 起它们是真的**。已发布的 v0.15.0 release notes 同样不改，理由相同。
+
 ### 接入方式与预算
 
-发版前手动跑，**不进常规 CI**（慢，且随机 —— 一条红必须先用种子复现才算数）。CI 只对它跑 shellcheck。用法与两个 RED 记在 README 发布清单第 8 条。
+发版前手动跑，**不进常规 CI**（慢，且随机 —— 一条红必须先用种子复现才算数）。CI 只对它跑 shellcheck，以及上面那两处确定性 RED 签名。用法与两个 RED 记在 README 发布清单第 8 条。
 
 ```
 200 例 非崩溃  4m44s      200 例 崩溃  4m16s

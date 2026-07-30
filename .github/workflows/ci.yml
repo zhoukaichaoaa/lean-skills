@@ -22,6 +22,12 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          # Every RED gate below proves itself against a released tag. checkout
+          # fetches no tags by default, so until 0.17.7 `git show v0.17.2:...`
+          # failed on every single run and each gate skipped itself in silence.
+          # 0 = full history, which is what makes those tags reachable.
+          fetch-depth: 0
 
       - name: install.sh
         if: runner.os != 'Windows'
@@ -573,7 +579,20 @@ jobs:
           # ErrorActionPreference=Stop becomes a terminating NativeCommandError.
           $prevEAP = $ErrorActionPreference
           $ErrorActionPreference = 'Continue'
-          git show v0.12.0:install.ps1 | Out-File -FilePath "$env:RUNNER_TEMP\old.ps1" -Encoding utf8
+          # $LASTEXITCODE, not faith: a native command that fails does NOT stop a
+          # PowerShell script, so before 0.17.7 this line printed
+          # "fatal: invalid object name 'v0.12.0'." into a green leg and the gate
+          # below compared against an empty file. The log said fatal; the run
+          # said success.
+          $fxRepo = if ($env:LEAN_FIXTURE_REPO) { $env:LEAN_FIXTURE_REPO } else { "." }
+          git -C $fxRepo show v0.12.0:install.ps1 | Out-File -FilePath "$env:RUNNER_TEMP\old.ps1" -Encoding utf8
+          if ($LASTEXITCODE -ne 0) {
+            throw "CI GATE BROKEN: cannot read install.ps1 from v0.12.0 - this fixture is what proves the installer matrix rejects v0.12.0"
+          }
+          if (-not (Test-Path "$env:RUNNER_TEMP\old.ps1") -or (Get-Item "$env:RUNNER_TEMP\old.ps1").Length -eq 0) {
+            throw "CI GATE BROKEN: v0.12.0:install.ps1 came back empty - this fixture is what proves the installer matrix rejects v0.12.0"
+          }
+          Write-Output "fixture ok: v0.12.0:install.ps1 -> the installer matrix must reject v0.12.0"
 
           # Both interpreters, because they are not the same language: 5.1 and
           # pwsh 7 differ on native-command redirection, on -LiteralPath, and on
@@ -646,7 +665,8 @@ jobs:
           # ...and this check must be able to fail. Feed it the v0.17.0 block
           # and require a finding, or a broken extractor would lint an empty
           # file and pass for the rest of time.
-          git show v0.17.0:"$M" > "$RUNNER_TEMP/old.md" 2>/dev/null || true
+          sh tests/fixture.sh v0.17.0 "$M" "$RUNNER_TEMP/old.md" \
+            "shellcheck must reject v0.17.0's park block"
           if [ -s "$RUNNER_TEMP/old.md" ]; then
             awk -v tag="# lean-skills:park" '
               $0 ~ /^ *```/ { if (inb) { inb=0 }; next }
@@ -660,6 +680,9 @@ jobs:
           # install.sh, minus one false positive: `CDPATH= cd -- ...` is a
           # deliberate command-prefix assignment, not an attempt to set a var.
           shellcheck -s sh -e SC1007 install.sh
+          # fixture.sh is POSIX sh too, and it is the single point every RED gate
+          # now depends on - a fault in it disarms all seven at once.
+          shellcheck -s sh tests/fixture.sh
           # The test scripts, minus the idioms they are built on: SC2016 because
           # the rollback anchors are literal shell text handed to python and must
           # not expand; SC1091 because the sourced recipe only exists at run time;
@@ -1237,7 +1260,8 @@ jobs:
           # $(...) (which splits a tracked path on its spaces). Both faults are on
           # the tracked side, which 0.17.5 kept, so this fixture still bites.
           for old in v0.17.0; do
-            git show "$old:skills/resolving-merge-conflicts/SKILL.md" > "$RUNNER_TEMP/old-$old.md" 2>/dev/null || continue
+            sh tests/fixture.sh "$old" skills/resolving-merge-conflicts/SKILL.md \
+              "$RUNNER_TEMP/old-$old.md" "the parking matrix must reject $old's recipe"
             if bash tests/parking_matrix.sh "$RUNNER_TEMP/old-$old.md" >/dev/null 2>&1; then
               echo "$old's recipe passes the parking matrix; it should not"; exit 1
             fi
@@ -1274,7 +1298,8 @@ jobs:
           # injection points parse is a bash-version property and may differ
           # between the Linux and macOS runners. The failure names cannot.
           for old in v0.17.2; do
-            git show "$old:skills/resolving-merge-conflicts/SKILL.md" > "$RUNNER_TEMP/old-$old.md" 2>/dev/null || continue
+            sh tests/fixture.sh "$old" skills/resolving-merge-conflicts/SKILL.md \
+              "$RUNNER_TEMP/old-$old.md" "the crash suite must fail on $old by 4 named kills"
             rc=0
             bash tests/parking_crash.sh "$RUNNER_TEMP/old-$old.md" > "$RUNNER_TEMP/red-$old.log" 2>&1 || rc=$?
             if [ "$rc" -eq 0 ]; then
@@ -1294,8 +1319,10 @@ jobs:
           # are not random though: fixed seed, fixed target version, fixed wording.
           # So they are pinned, and this is also the only place the property test
           # runs on anything but the author's Windows box.
-          git show v0.17.0:skills/resolving-merge-conflicts/SKILL.md > "$RUNNER_TEMP/pp-0170.md"
-          git show v0.17.2:skills/resolving-merge-conflicts/SKILL.md > "$RUNNER_TEMP/pp-0172.md"
+          sh tests/fixture.sh v0.17.0 skills/resolving-merge-conflicts/SKILL.md \
+            "$RUNNER_TEMP/pp-0170.md" "the property test must catch v0.17.0's word-split"
+          sh tests/fixture.sh v0.17.2 skills/resolving-merge-conflicts/SKILL.md \
+            "$RUNNER_TEMP/pp-0172.md" "the property test must catch v0.17.2's manifest defect under crash"
           rc=0
           bash tests/parking_property.sh -n 12 -s 1000 -k "$RUNNER_TEMP/pp-0170.md" > "$RUNNER_TEMP/pp-red1.log" 2>&1 || rc=$?
           [ "$rc" -ne 0 ] || { echo "the property test passes v0.17.0, whose diff word-splits paths with spaces; it must not"; exit 1; }
@@ -1344,7 +1371,8 @@ jobs:
           grep -qE '^21 passed, 0 failed, 0 skipped' "$RUNNER_TEMP/im.log" \
             || { echo "expected 21 installer cases, none skipped"; exit 1; }
           for old in v0.12.0 v0.13.1; do
-            git show "$old:install.sh" > "$RUNNER_TEMP/old-$old.sh" 2>/dev/null || continue
+            sh tests/fixture.sh "$old" install.sh "$RUNNER_TEMP/old-$old.sh" \
+              "the installer matrix must reject $old's install.sh"
             if bash tests/install_matrix.sh "$RUNNER_TEMP/old-$old.sh" >/dev/null 2>&1; then
               echo "$old passes the installer matrix; it should not"; exit 1
             fi
