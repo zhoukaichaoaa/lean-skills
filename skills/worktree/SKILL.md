@@ -53,13 +53,13 @@ If the branch or the worktree path already exists, reuse it when it is yours and
 
 ## Step 2 — Setup and baseline
 
-Install dependencies **the way the repo does**. Node: a `packageManager` field in `package.json` decides it; otherwise the lockfile — `pnpm-lock.yaml` → pnpm, `yarn.lock` → yarn, `bun.lockb` → bun, `package-lock.json` → npm. Python: `uv.lock` → uv, `poetry.lock` → poetry, `pdm.lock` → pdm, `requirements*.txt` → pip. Rust `Cargo.toml` → cargo, Go `go.mod` → go. Nothing decisive and no documented setup? Say what you found and ask instead of guess-installing.
+Install dependencies **the way the repo does**. Node: a `packageManager` field in `package.json` decides it; otherwise the lockfile — `pnpm-lock.yaml` → pnpm, `yarn.lock` → yarn, `bun.lock` or `bun.lockb` → bun, `package-lock.json` → npm. Python: `uv.lock` → uv, `poetry.lock` → poetry, `pdm.lock` → pdm, `requirements*.txt` → pip. Rust `Cargo.toml` → cargo, Go `go.mod` → go. Nothing decisive and no documented setup? Say what you found and ask instead of guess-installing.
 
 Then run the test suite once and **report the result as it is**. A green baseline is what makes later failures attributable to your change; a red one is information the user needs before you start, and whether to proceed is their call.
 
 ## Step 3 — Tear down when the work lands
 
-Worktrees and their installed dependencies do not clean themselves up, and an ignored directory never shows in `git status` — they accumulate silently. Once the branch is merged or abandoned: `git worktree remove <path>` (`--force` only when you mean to discard what is in it), then delete the branch if it has served its purpose. Tell the user when you have done this, and when you haven't.
+Worktrees and their installed dependencies do not clean themselves up, and an ignored directory never shows in `git status` — they accumulate silently. A worktree that has run tests or installs holds generated files (`__pycache__/`, `node_modules/`, build output), so expect plain `git worktree remove` to refuse — a one-line refusal that names no files. List what is actually there with `git -C <path> status --porcelain --untracked-files=all`: every entry generated is what discarding means here; anything you cannot account for goes back to the user first. Once the branch is merged or abandoned and that list is accounted for: `git worktree remove <path>` (`--force` once you mean to discard everything the list named), then delete the branch if it has served its purpose. Tell the user when you have done this, and when you haven't.
 
 ## Completion criterion
 

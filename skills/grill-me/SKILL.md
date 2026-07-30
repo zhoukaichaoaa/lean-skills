@@ -23,6 +23,8 @@ Write the resolved tree to `<plans>/<slug>.md`, where the slug names the feature
 - in a git repository: **`"$(git rev-parse --git-common-dir)/../.plans"`** — quoted, because that expands to an absolute path inside a linked worktree and repository paths contain spaces. It resolves to the main checkout's `.plans/` from anywhere, including inside a worktree, which an untracked `.plans/` never gets copied into. **Inside a submodule it does not** — it lands in `.git/modules/`, so check `git rev-parse --show-superproject-working-tree` first and use the superproject's `.plans/` when that is non-empty;
 - outside one: `.plans/` in the current directory.
 
+A repository created with `--separate-git-dir` puts the common dir outside the checkout, so this lands beside the git dir rather than inside the checkout. The three consumers resolve it the same way and stay consistent with each other there; the location is surprising, not broken. A layout this collection does not chase further.
+
 `/implement` and `spec-review` look it up the same way; a plan somewhere else is a plan they will not find, so move it only if you also tell them where.
 
 In a git repository, keep it out of the way by appending `.plans/` to `$(git rev-parse --git-common-dir)/info/exclude` — check the line isn't already there first. Outside one, skip that step. Do not commit it; that is my call, and if I want it shared, ask whether it belongs in `.gitignore` or in `docs/`.

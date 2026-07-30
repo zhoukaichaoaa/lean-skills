@@ -274,8 +274,8 @@ CASES = [
         'git merge-base --all HEAD <that head>', 'git merge-base HEAD <that head>')),
     ('skill: a path recipe loses core.quotePath', 'rec', lambda: edit(
         'skills/resolving-merge-conflicts/SKILL.md',
-        "   git -c core.quotePath=false status --porcelain -- ':(top)first-path'",
-        "   git status --porcelain -- ':(top)first-path'")),
+        "   git -c core.quotePath=false status --porcelain -- ':(literal,top)first-path'",
+        "   git status --porcelain -- ':(literal,top)first-path'")),
     ('skill: a recipe un-fenced into prose', 'rec', lambda: edit(
         'skills/resolving-merge-conflicts/SKILL.md',
         '   ```bash\n   cat "$G/MERGE_HEAD"', '   cat "$G/MERGE_HEAD"')),

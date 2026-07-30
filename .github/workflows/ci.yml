@@ -1094,8 +1094,8 @@ jobs:
             || { echo "the parking matrix skipped cases; on this platform none may be"; exit 1; }
           # ...and the count itself, so a case that quietly stops being generated
           # cannot hide inside "0 failed"
-          grep -qE '^41 passed, 0 failed, 0 skipped' "$RUNNER_TEMP/pm.log" \
-            || { echo "expected 41 parking cases; the matrix shrank or grew"; exit 1; }
+          grep -qE '^45 passed, 0 failed, 0 skipped' "$RUNNER_TEMP/pm.log" \
+            || { echo "expected 45 parking cases; the matrix shrank or grew"; exit 1; }
           # ...and the cases that carry the awkward names by name, because a count
           # stays right while a case quietly turns into a duplicate of an easy one.
           # These are exactly the ones a broken capability probe drops first.
@@ -1106,10 +1106,14 @@ jobs:
                 || { echo "the parking matrix never passed a case named '$c / $w'"; exit 1; }
             done
           done
-          # the two standalone cases, which carry evidence a state name cannot:
-          # that a half-finished park is recoverable, and that :(literal) keeps a
-          # glob-shaped name from reaching a conflicted file
-          for c in "park fails partway" "glob name beside a conflicted file" "input list is not NUL-separated"; do
+          # The standalone cases, named rather than counted - each carries evidence
+          # no state name can: that a half-finished park is recoverable, that
+          # :(literal) keeps a glob-shaped name away from a conflicted file, that a
+          # collapsed directory entry is refused, that an abort does not take the
+          # rescued work with it, that a parent turned symlink cannot move a file
+          # out of the repository, and that a leaf which is a link to a directory is
+          # parked rather than mistaken for one.
+          for c in "park fails partway" "glob name beside a conflicted file" "input list is not NUL-separated" "abandoned after parking" "untracked directory via step 3's own command" "parent became a symlink out of the repository" "leaf is a symlink to a directory"; do
             grep -qxF "  ok    $c" "$RUNNER_TEMP/pm.log" \
               || { echo "the parking matrix never passed the case '$c'"; exit 1; }
           done
@@ -1129,8 +1133,8 @@ jobs:
           # an hour in. Anchors have gone stale in four releases of this repo.
           python3 tests/check_anchors.py
           # SIGKILL at every step of park. The matrix cannot see this class at
-          # all - measured: reverting the fix below leaves the matrix at 41/0/0
-          # while the crash suite drops four cases. Its injection is a real
+          # all - measured: reverting the fix below leaves the matrix entirely
+          # green while the crash suite drops four cases. Its injection is a real
           # SIGKILL because a catchable signal would be eaten by a trap, and a
           # clean early exit would run handlers a crash never runs.
           bash tests/parking_crash.sh | tee "$RUNNER_TEMP/crash.log"
@@ -1149,7 +1153,11 @@ jobs:
               exit 1
             fi
           done
-          # ...and every single fix, rolled back one at a time, must turn it red
+          # ...and each fix, rolled back, must turn the matrix red. Two guards
+          # are excluded by name in that suite's own notes and say why: the
+          # directory entry guard is unreachable from a legal input list, and
+          # the parent-symlink protection is two overlapping layers that only
+          # go red when both are removed, which is how that case rolls them.
           bash tests/parking_rollback.sh | tee "$RUNNER_TEMP/rb.log"
           # On Linux nothing may be skipped: GNU mv permutes its options, so the
           # one platform-conditional rollback can and must run here. macOS is

@@ -80,6 +80,8 @@ Read any untracked files that belong to the change; they are additions the diff 
 
 In order: the path the caller passed; a tracker issue referenced in the commit messages (`#123`, `Closes #45` — fetch with `gh issue view <n>`); a plan from `/grill-me` at `"$(git rev-parse --git-common-dir)/../.plans"` (that resolves to the main checkout from inside a worktree too; inside a **submodule** it lands in `.git/modules/` instead, so check `git rev-parse --show-superproject-working-tree` and use the superproject when it is non-empty, and outside a repository fall back to `./.plans`); a spec file under `docs/`, `specs/`, or `.scratch/`.
 
+A repository created with `--separate-git-dir` puts the common dir outside the checkout, so `.plans` lands beside the git dir rather than inside the checkout. The three consumers resolve it the same way and stay consistent with each other there; the location is surprising, not broken. A layout this collection does not chase further.
+
 **Take a plan only if it matches this change** — its slug or title names the branch or feature. Several candidates, or none that match: report that and stop. (Do not judge by file age: a plan written before a `git pull` is older than the base commit and still the right plan.) A stale plan from another feature yields confident, entirely fictional findings, which is worse than no review.
 
 If there is no spec at all, say so and stop. Inventing one from the diff reviews the change against itself.

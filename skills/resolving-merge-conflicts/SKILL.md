@@ -18,7 +18,7 @@ Run every command below and **read what it printed**. Two shapes account for eve
    cd "$(git rev-parse --show-toplevel)"
    ```
 
-   Inside a bare repository that command fails; there is no working tree and no conflict to resolve. Where a pathspec is passed rather than a filename, `:(top)` says the same thing and is used below as a second line of defence — but `mv` and `mkdir` take no pathspec, so the `cd` is what makes those safe.
+   Inside a bare repository that command fails; there is no working tree and no conflict to resolve. Where a pathspec is passed rather than a filename, `:(literal,top)` says the same thing and is used below as a second line of defence — `top` for this, and `literal` because git also matches a pathspec as a wildcard, so a name like `a[1].txt` otherwise reaches `a1.txt`. `mv` and `mkdir` take no pathspec, so the `cd` is what makes those safe.
 
 1. **Identify the operation and its incoming side.** Which one is in progress decides both how it ends and what counts as "its" changes. Look in `$(git rev-parse --git-dir)` — `--git-dir`, not `--git-common-dir`: inside a linked worktree the conflict state lives in that worktree's own directory.
 
@@ -86,8 +86,10 @@ Run every command below and **read what it printed**. Two shapes account for eve
 
    ```bash
    git -c core.quotePath=false diff --cached --name-status -M HEAD
-   git -c core.quotePath=false status --porcelain
+   git -c core.quotePath=false status --porcelain --untracked-files=all
    ```
+
+   `--untracked-files=all` matters: by default `status` collapses a wholly-untracked directory to a single entry ending in `/`, and every step below reads an entry as a file. Handed `notes/`, step 8 creates a directory of that name inside the parking area and moves the directory into it, so the work returns at `notes/notes/sub/file.txt` while the parking area is cleaned up as a success. Step 8's own verification already reads the list with `-uall`; this is that same list.
 
    `--name-status -M` matters: with `--name-only` a rename shows up as the new path alone, and the deletion of the old path — still staged — travels into the commit unnoticed. `core.quotePath=false` matters for the same reason: by default git prints non-ASCII paths octal-escaped, and pasting that back produces `pathspec did not match`, which reads exactly like "this file is untracked".
 
@@ -97,7 +99,7 @@ Run every command below and **read what it printed**. Two shapes account for eve
    - **Working-tree only** — first column blank in porcelain (` M`, ` D`). Tracked, so git knows them, but the index still holds the `HEAD` version; there is nothing to unstage.
    - **Untracked** (`??`). Theirs, and git does not know them at all.
 
-   **Paths with a space are quoted no matter what.** `--porcelain` wraps any path containing a space, a quote or a backslash in C quotes, and `core.quotePath` does not turn that off — it governs non-ASCII bytes only. Pasting `"my report.txt"` back fails two different ways: `git restore --staged` rejects the whole command, and step 9's `status` silently matches nothing. Read such paths with `git status --porcelain -z`, which separates records with NUL and quotes nothing.
+   **Paths with a space are quoted no matter what.** `--porcelain` wraps any path containing a space, a quote or a backslash in C quotes, and `core.quotePath` does not turn that off — it governs non-ASCII bytes only. Pasting `"my report.txt"` back fails two different ways: `git restore --staged` rejects the whole command, and step 9's `status` silently matches nothing. Read such paths with `git status --porcelain -z --untracked-files=all`, which separates records with NUL and quotes nothing — the same `-uall` step 3's main command uses, so this line cannot rebuild the collapsed-directory list that command exists to avoid.
 
 4. **Take the user's staged work out of the index before you resolve anything.** This is what makes the promise in step 8 achievable:
 
@@ -115,7 +117,9 @@ Run every command below and **read what it printed**. Two shapes account for eve
 
 5. **Find the primary sources** for each conflict. Understand deeply why each change was made, and what the original intent was. Read the commit messages, check the PRs, check original issues/tickets.
 
-6. **Resolve each hunk.** Preserve both intents where possible. Where incompatible, pick the one matching the operation's stated goal and note the trade-off. Keep the resolution to what the two sides already do. Resolve rather than flee — difficulty alone is never a reason to `--abort`. Abort only when the operation itself turns out to be a mistake (wrong branch, wrong base, wrong direction): say why, abort, and restart it right.
+6. **Resolve each hunk.** Preserve both intents where possible. Where incompatible, pick the one matching the operation's stated goal and note the trade-off. Keep the resolution to what the two sides already do. Resolve rather than flee — difficulty alone is never a reason to `--abort`. Abort only when the operation itself turns out to be a mistake (wrong branch, wrong base, wrong direction): say why, park first if rebasing, abort, and restart it right.
+
+   **A rebase abort destroys the rescued work.** `git rebase --abort` hard-resets tracked files, so the modifications step 4 moved into the working tree do not survive it. Mid-conflict the obvious holding places are worse than they look: `git stash` refuses outright on an unmerged index, `git commit -a` *succeeds* and commits the conflict markers along with everything else, and a pathspec commit (`git commit -m … -- <path>`) — refused during a merge or cherry-pick — does succeed during a rebase, at the price of baking the rescued path into the rebased history as a commit rather than returning it uncommitted. Parking is the one exit that keeps the work uncommitted. Before aborting a rebase, run step 8's parking, or at minimum write `git diff --binary -- ':(literal,top)<each rescued path>' > "$G/rescue.patch"` and move rescued untracked files aside — which is also what unblocks the abort when a rescued untracked path collides with one tracked on the original head, since git refuses the reset outright rather than overwrite it. Merge, cherry-pick and revert aborts keep working-tree modifications and need none of this.
 
 7. Discover the project's **automated checks** and run them — typically typecheck, then tests, then format. Fix anything the operation broke.
 
@@ -139,15 +143,39 @@ Run every command below and **read what it printed**. Two shapes account for eve
    G="$(git rev-parse --git-dir)" || die "no git dir"
    STATE="$G/lean-parked.state"
    [ ! -e "$STATE" ] || die "an unfinished parking is still open: $STATE. Run the restore block; if you have already taken its contents back by hand, delete $STATE"
-   # $G/lean-park-input is step 4's list, one NUL-terminated path per entry:
+   # $G/lean-park-input is step 4's list, one NUL-terminated path per entry.
+   # Every entry names a leaf - a file, a symlink, never a directory. `git status`
+   # prints a directory only when it is not asked for `--untracked-files=all`,
+   # which is why step 3 asks for it.
    #   : > "$G/lean-park-input"
    #   printf '%s\0' 'each/path/from/step 4' >> "$G/lean-park-input"
    # Validate before creating anything: a list written with '\n' instead of '\0'
    # is not empty, so `-s` passes, every `read -d ''` below then reads nothing,
    # and the whole block runs to completion having parked not one file.
+   # Every check on the list happens here, before a name is chosen, a
+   # directory is made or a state file is published - because a `die` after
+   # any of those leaves an open parking area that the next run refuses to
+   # step over ("an unfinished parking is still open"), and clearing it by
+   # the message's own advice takes the input list with it. 0.17.2's rule -
+   # publish the state before the first move - is about *moves*; nothing here
+   # moves anything, so reading first costs nothing and strands nothing.
    [ -s "$G/lean-park-input" ] || die "no input list"
    [ "$(tail -c 1 -- "$G/lean-park-input" | tr -d -c '\000' | wc -c)" -eq 1 ] ||
      die "input list is not NUL-terminated - build it with printf '%s\\0'"
+   while IFS= read -r -d '' p; do
+     # A directory here means step 3 read a collapsed `notes/` entry. Parking
+     # one nests the work a level deeper on the way back, so refuse rather
+     # than guess. `-L` first: POSIX `test -d` follows a symlink, so a leaf
+     # that is a link *to* a directory answers true to `-d` and is exactly
+     # what the contract above says an entry may be.
+     #
+     # Defence in depth, and the suite does not prove it independently: with
+     # step 3 asking for `--untracked-files=all` a legal list holds no
+     # directory, so this branch is unreachable from any input the tests can
+     # build. Said plainly rather than given a case that cannot fail.
+     case "$p" in */) die "input list holds a directory, not a file: $p" ;; esac
+     [ -L "$p" ] || [ ! -d "$p" ] || die "input list holds a directory, not a file: $p"
+   done < "$G/lean-park-input"
    PARK_NAME="lean-parked-$(date +%s)-$$"
    PARK="$G/$PARK_NAME"
    [ ! -e "$PARK" ] || die "name collision: $PARK"
@@ -245,12 +273,39 @@ Run every command below and **read what it printed**. Two shapes account for eve
    # Reversing the two only moves the window - then the manifest can name a
    # file that was never moved. Reading the directory has no window at all.
    find "$PARK/untracked" -mindepth 1 ! -type d -print0 > "$PARK/present" 2>/dev/null || :
+   TOP="$(pwd -P)" || die "cannot resolve the worktree root"
    while IFS= read -r -d '' src; do
      p=${src#"$PARK/untracked/"}
      if [ -e "$p" ] || [ -L "$p" ]; then HELD=1; continue; fi
+     # Walk every parent, not just the leaf. The operation may have created a
+     # parent as a symlink pointing out of the repository - `mkdir -p` and `mv`
+     # both follow it, so the leaf check passes and the file lands outside,
+     # with the parking area cleaned up as a success. Measured on POSIX and on
+     # Windows with `mklink /D`. There is no no-follow primitive in POSIX sh,
+     # so a symlink swapped in between this check and the move would still win;
+     # for a single user driving one local repository that race is accepted,
+     # and the physical-path check below is what catches it if it happens.
+     blocked=
+     probe=
+     rest=$p
+     while [ "$rest" != "${rest#*/}" ]; do
+       seg=${rest%%/*}; rest=${rest#*/}
+       probe=${probe:+$probe/}$seg
+       if [ -L "$probe" ]; then blocked="$probe is a symlink"; break; fi
+       if [ -e "$probe" ] && [ ! -d "$probe" ]; then blocked="$probe is not a directory"; break; fi
+     done
+     if [ -n "$blocked" ]; then HELD=1; continue; fi
      case "$p" in */*) d=${p%/*} ;; *) d=. ;; esac   # not dirname: see park
      mkdir -p -- "$d" || die "cannot make a home for $p"
      mv -- "$src" "$p" || die "cannot put $p back"
+     # ...and confirm where it actually landed, which is the only check that
+     # survives a symlink swapped in after the walk above.
+     LANDED="$(cd -- "$d" 2>/dev/null && pwd -P)" || LANDED=
+     case "$LANDED" in
+       "$TOP"|"$TOP"/*) : ;;
+       *) mv -- "$p" "$src" || die "$p landed outside the worktree at ${LANDED:-unresolvable} and would not come back"
+          HELD=1 ;;
+     esac
    done < "$PARK/present"
    # `-quit` is not in every find; one line of output is all this needs
    LEFT="$(find "$PARK/untracked" -mindepth 1 ! -type d -print 2>/dev/null | head -n 1)"
@@ -277,7 +332,7 @@ Run every command below and **read what it printed**. Two shapes account for eve
 
    A path that is occupied means the operation created something there — exactly the collision that made the parking necessary. Leave the operation's version, leave the user's copy in `$PARK`, and tell them both paths. Delete `$PARK` only when every file has been moved back.
 
-   **Then check, do not assume.** Compare `git status --porcelain --untracked-files=all` against what step 3 recorded: same paths, and the same first column. A staged `D` where step 4 left an unstaged one is the failure this step exists to prevent, and step 9's existence check cannot see it.
+   **Then check, do not assume.** Compare `git status --porcelain --untracked-files=all` against the state the rescue is meant to leave: the same paths, with rescued tracked work unstaged (` M` / ` D`) and rescued additions untracked (`??`). A path that reads staged where the rescue left it unstaged is the failure this step exists to prevent, and step 9's existence check cannot see it.
 
    Merge, cherry-pick and revert do not need any of this — all three finish with the user's modifications sitting in the working tree, exit 0, and commit nothing of theirs.
 
@@ -286,14 +341,14 @@ Run every command below and **read what it printed**. Two shapes account for eve
 9. **Prove the user's work survived.** Ask it of the paths themselves, which is exact and operation-agnostic:
 
    ```bash
-   git -c core.quotePath=false status --porcelain -- ':(top)first-path' ':(top)second-path'
+   git -c core.quotePath=false status --porcelain -- ':(literal,top)first-path' ':(literal,top)second-path'
    ```
 
-   **One `:(top)` argument per path.** Several paths inside a single pair of quotes is *one* pathspec containing spaces; it matches nothing, exits 0, and reads exactly like "all of it was committed". A rename forces this case — step 3 puts both the old and the new path on the list.
+   **One `:(literal,top)` argument per path.** Several paths inside a single pair of quotes is *one* pathspec containing spaces; it matches nothing, exits 0, and reads exactly like "all of it was committed". A rename forces this case — step 3 puts both the old and the new path on the list.
 
-   Each must still appear, **and in the column step 3 recorded it in**. Existence alone is not enough: a path that came back *staged* when the user had it unstaged is one `git commit` away from being swept up, and it reads as present here. Compare the first two characters, not just the name.
+   Each must still appear, **in the state the rescue left it** — not the column step 3 recorded, which step 4 changed on purpose: a staged modification (`M `) must now read ` M`, a staged addition (`A `) must now read `??`, a staged deletion (`D `) must now read ` D`; working-tree-only and untracked paths keep their step-3 column, and a combined column (`MM`, `AM`, `MD`) lands on the same ` M` / `??` / ` D` its staged half maps to. The check is directional: a rescued path that reads staged at all is one `git commit` away from being swept up, and existence alone proves nothing. Compare the first two characters against this mapping, not just the name.
 
-   A path that has gone quiet was committed by the operation. The `:(top)` prefix matters here for the same reason step 0 does: pathspecs resolve against the current directory while status printed them relative to the repository root, so running this from a subdirectory silently matches nothing and reads the same wrong way. If step 3's list was empty, say so — there was no in-flight work to protect, and an empty check proves nothing.
+   A path that has gone quiet was committed by the operation. Both halves of `:(literal,top)` matter here for the same reasons they do in step 4: `top` because pathspecs resolve against the current directory while status printed them relative to the repository root, so running this from a subdirectory silently matches nothing and reads the same wrong way; `literal` because git matches a pathspec as a wildcard too, so asking about `a[1].txt` reports whatever `a1.txt` is doing and calls it the answer. If step 3's list was empty, say so — there was no in-flight work to protect, and an empty check proves nothing.
 
    Then cross-check against what the operation actually recorded, using the boundary from step 1:
 

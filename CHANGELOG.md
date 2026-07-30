@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.17.4 — 2026-07-30
+
+两份外部审计合并整改。**三条生产缺陷先复现为红再改**，其中一条会把用户的文件搬到仓库外并报成功。
+
+### 【静默丢失】restore 跟随父级符号链接，把文件搬出仓库
+
+交回时只检查最终路径，父组件不查。操作的后续提交把父目录建成指向仓库外的符号链接时，`mkdir -p` 与 `mv` 顺着链接走，文件落到仓库外，**restore 退出 0、停车区与 state 一并清理**。实测：
+
+```
+restore rc=0     仓库外出现该文件? YES     停车区? 已删     state? 已删
+```
+
+改为从工作区根逐段检查每一个父组件（任一段是符号链接、或存在但不是目录 → 按现有 clash 语义 HELD），再加一道纵深防御：搬完后用子 shell `cd` + `pwd -P` 校验落点物理路径仍以工作区根为前缀，否则搬回停车区并 HELD。**TOCTOU 如实标注在配方注释里**：POSIX sh 没有 no-follow 原语，检查与移动之间理论上存在竞态，单用户本地流程的威胁模型下接受 —— 不装作已解决。
+
+### 【错位恢复】未跟踪目录回到嵌套路径
+
+step 3 的清单命令不带 `--untracked-files=all`，status 把整个未跟踪目录折成一条 `notes/`。停靠块拿到它后建 `untracked/notes/` 再把目录搬进去，回来就是 `notes/notes/sub/file.txt`，而停车区按成功清理。三道修正：命令加 `-uall`（与 step 8 校验处已用的口径统一）；输入契约注释写明**每项都是叶节点**；停靠块对目录项直接 `die`。
+
+**矩阵为什么看不见它**：测试辅助自己用 `-uall` 构造输入，真实的 `notes/` 形状从没进过被测代码。新用例因此**从技能正文里抽出 step 3 的命令来构造输入**，消除辅助掩蔽——我第一版用例又把 `-uall` 写死在测试里，在 v0.17.3 上照样通过，重写后才真红。
+
+### 【误读状态】step 9 的 pathspec 被当 glob 展开
+
+目标 `a[1].txt` 干净、旁边 `a1.txt` 有改动时，`:(top)a[1].txt` 输出 ` M a1.txt` —— **把别的文件的状态当成了目标文件的**。0.17.0 已把 step 4 改成 `:(literal,top)`，step 9 漏改。全文清点后，所有消费 status 打印路径的地方一律补上 `literal`。
+
+### rebase 的 abort 会毁掉第 4 步救出的工作
+
+step 6 允许 abort，但没说 `git rebase --abort` 会**硬重置 tracked 文件**。实测（git 2.55）：rebase 的 abort 把未暂存修改抹掉，merge 与 cherry-pick 的 abort 完整保留。另一个细化形状：救出的未跟踪文件与 orig-head 上已跟踪路径重合时，`rebase --abort` **整个拒绝执行**（rc=128，仍在 rebase，文件完好）—— 挪开文件同时也是解锁 abort 的动作。
+
+**一处与审计不符的实测，已按实测改写**：审计稿写“冲突中 `git stash` 与 `git commit` 都被拒”。实测：`git stash` 的 `push` / `push -u` / `create` 确实一律被拒；但 `git commit` **不是**——`git commit -m x` 与“先 add 再
+commit”报 unmerged files（rc=128），而 **`git commit -a` 成功并把带冲突标记的文件提交了**，`git commit -m x -- <path>` 也成功。正文改为写实测到的三种行为，因为“`-a` 会提交冲突标记”比“被拒”危险得多。
+
+### 恢复两件在 0.17.0 重写时遙失的测试资产
+
+v0.15.0 有 `abandon_case`（park → `rebase --abort` → 补丁与未跟踪文件必须都活过 abort）与配套回滚红例“untracked side not parked”，0.17.0 重写时静默丢失——**CI 的用例数闸门装在重写之后，看不见装闸前丢的东西**。两件已按现行三进程套件结构重写恢复。
+
+### 其余
+
+- `worktree` 锁文件表：`bun.lock` 或 `bun.lockb`（Bun 1.2 起默认文本锁文件）。
+- `worktree` 拆除步骤：跑过测试或装过依赖的 worktree 被 `remove` 拒绝是**常态**，并给出拒绝时的判断规则（git 的拒绝只有一行、不列任何文件，所以自己用 `git -C <path> status --porcelain --untracked-files=all` 列，认不出来的先回用户）。
+- `grill-me` / `implement` / `spec-review` 三个消费者各补一句 `--separate-git-dir` 已知局限：那种布局下 `.plans` 落在 git 目录旁而不在检出里，三处表达式相同、彼此仍一致，Spec 轴不断，只是位置反直觉。
+- README 补记 `spec-review` 的版本地板：`background` 字段 [官方文档](https://code.claude.com/docs/en/skills#run-skills-in-a-subagent)标注 **Requires Claude Code v2.1.218 or later**，默认 `true`；更早版本 fork 本来就一律阻塞，行为一致 —— 要当心的是删掉 `background: false` 会让 `/implement` 不再等评审结果。
+- 已知待办：**触发率 eval 尚未实现**，已记在 README 维护节，不静默丢弃。
+- `tdd` 正文引用的 `code-review` 是**记录在案的取舍**（NOTICE 跟踪“正文未动”，0.8.0 脚注已注明改名），本批未改，仅在报告里供维护者拍板。
+
+**验证**：停靠矩阵 41 → **44 例**；逐条回滚 9 → **10 条**；锚点静态检查 10 条 0 失效。两条新用例在 v0.17.3 上**都红**、在本版**都绿**。详见 [REPORT-v0.17.4.md](REPORT-v0.17.4.md)。
+
 ## 0.17.3 — 2026-07-30
 
 停靠机制简化计划的第 1、3 步。**第 3 步第一次跑就拓出了一个丢数据缺陷**，而现有的 41 例矩阵对它完全看不见。

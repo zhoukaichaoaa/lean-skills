@@ -98,6 +98,8 @@ cd lean-skills
 
 插件模式下技能带命名空间：`/lean-skills:implement`。裸名 `/implement` 通常也能用——[除非同名的命令已经存在](https://code.claude.com/docs/en/skills#how-a-skill-gets-its-command-name)。本合集没有与内置技能重名的技能（`spec-review` 正是为此从 `code-review` 改名），所以两种写法都可以。
 
+**`spec-review` 有一条版本地板。** 它以 forked 子代理运行并声明 `background: false`——同步等待,因为 `/implement` 的评审步骤要靠这个结果才能往下走。[官方文档](https://code.claude.com/docs/en/skills#run-skills-in-a-subagent)对 `background` 字段标注 **Requires Claude Code v2.1.218 or later**;更早的版本没有这个字段,但那时 forked 技能**本来就一律阻塞等待**,所以行为一致。真正要当心的是反过来:v2.1.218 起 fork **默认转入后台**(`background` 默认 `true`)——是 `background: false` 把它按在前台的。删掉那一行,`/implement` 就不再等评审结果。
+
 ### 如果你已经装了 superpowers 插件
 
 它带一个 SessionStart hook，每次会话把 `using-superpowers` 全文注入上下文，里面有一条"哪怕只有 1% 可能相关也必须调用技能"。这条规则是为对抗早期模型跳过流程写的，今天的边际收益很低，但 token 成本没降。
@@ -189,6 +191,10 @@ cd lean-skills
 新增技能之前，先用收录标准的三个问题过一遍。加进来容易，删掉难 —— 这就是两个上游仓库都在积累"沉积层"的原因。
 
 版本历史见 [CHANGELOG.md](CHANGELOG.md)。
+
+### 已知待办
+
+**触发率 eval 尚未实现。** 常驻技能靠 description 触发,而「这句 description 到底触不触发得了」目前没有任何自动证据——改 description 是凭手感。最小可行形态:3–5 个场景用 `claude -p` 无头跑,判卷只查对应技能的调用有没有出现,不评价输出质量。记在这里而不是丢掉。
 
 ### 发布清单
 
