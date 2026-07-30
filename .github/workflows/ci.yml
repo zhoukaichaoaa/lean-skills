@@ -838,10 +838,14 @@ jobs:
           # Anchor on the skill text: if the recipe in SKILL.md changes, this test
           # must be revisited rather than silently keep testing a stale command.
           S=skills/spec-review/SKILL.md
-          grep -q 'git merge-base <base-ref> HEAD' "$S"
+          grep -q 'git merge-base --all <base-ref> HEAD' "$S"
           grep -q 'git diff <that-literal-sha>' "$S"
           grep -q 'git log <that-literal-sha>..HEAD --oneline' "$S"
-          grep -q 'git status --porcelain' "$S"
+          # -uall, not a bare --porcelain: the default folds an untracked
+          # directory into one `dir/` line and never names the files in it, so a
+          # whole new module reads as one word. Measured: three files under
+          # src/newfeature/ print as `?? src/`.
+          grep -q 'git status --porcelain --untracked-files=all' "$S"
           grep -q 'printed SHA' "$S"
 
           R="$RUNNER_TEMP/fixture"; rm -rf "$R"; git init -q "$R"; cd "$R"
@@ -863,6 +867,22 @@ jobs:
           grep -q 'gone.txt' <<<"$PATCH"
           grep -q 'new-name.txt' <<<"$PATCH"
           grep -q 'un tracked.txt' <<<"$STATUS"
+          # A single untracked file at the root is visible either way. An
+          # untracked *directory* is where the default hides the change: git
+          # prints one `src/` line and never names what is under it, so a whole
+          # new module reads as one word. Both halves are asserted, so if git
+          # ever stops collapsing, this fixture says so instead of going quiet.
+          mkdir -p src/newfeature/deep
+          printf 'a\n' > src/newfeature/a.py
+          printf 'b\n' > src/newfeature/deep/b.py
+          printf 'c\n' > src/newfeature/deep/c.py
+          if grep -q 'newfeature' <<<"$(git status --porcelain)"; then
+            echo "fixture no longer shows --porcelain collapsing an untracked directory"; exit 1
+          fi
+          UALL=$(git status --porcelain --untracked-files=all)
+          grep -q 'src/newfeature/a.py' <<<"$UALL"
+          grep -q 'src/newfeature/deep/b.py' <<<"$UALL"
+          grep -q 'src/newfeature/deep/c.py' <<<"$UALL"
           # The skill warns that an empty base silently degrades `git diff <BASE_SHA>`
           # into an unstaged-only diff. Prove it on a file that is *only* staged —
           # unlike a modified file, it cannot leak in as diff context.
@@ -876,6 +896,42 @@ jobs:
           if git merge-base HEAD 0000000000000000000000000000000000000000 >/dev/null 2>&1; then
             echo "expected merge-base against a bogus ref to fail"; exit 1
           fi
+          # Criss-crossed merges: two branches that each merged the other's
+          # EARLIER tip leave two equally valid merge bases. Bare `merge-base`
+          # answers with one of them and says nothing, and the two choices
+          # disagree about whose work the change contains -- measured below, a
+          # file branch A introduced reads as B's work under one baseline and is
+          # absent under the other. The old tips must be named by SHA: merging
+          # the current tips collapses this to a single base.
+          C="$RUNNER_TEMP/crisscross"; rm -rf "$C"; git init -q "$C"; cd "$C"
+          git config user.email ci@ci; git config user.name ci
+          printf 'r\n' > root.txt; git add -A; git commit -qm root
+          ROOT=$(git rev-parse HEAD)
+          git checkout -qb A; printf 'a1\n' > a.txt; git add -A; git commit -qm a1
+          A_OLD=$(git rev-parse HEAD)
+          git checkout -qb B "$ROOT"
+          printf 'b1\n' > b.txt; git add -A; git commit -qm b1
+          B_OLD=$(git rev-parse HEAD)
+          git checkout -q A; git merge -q --no-edit -m mergeB "$B_OLD"
+          git checkout -q B; git merge -q --no-edit -m mergeA "$A_OLD"
+          git checkout -q A; printf 'a2\n' > a2.txt; git add -A; git commit -qm a2
+          git checkout -q B; printf 'b2\n' > b2.txt; git add -A; git commit -qm b2
+          N_BASES=$(git merge-base --all A HEAD | grep -c .)
+          test "$N_BASES" -eq 2 \
+            || { echo "fixture no longer produces two merge bases (got $N_BASES)"; exit 1; }
+          test "$(git merge-base A HEAD | grep -c .)" -eq 1 \
+            || { echo "bare merge-base no longer answers with exactly one base"; exit 1; }
+          FIRST=$(git merge-base --all A HEAD | sed -n 1p)
+          SECOND=$(git merge-base --all A HEAD | sed -n 2p)
+          test "$(git diff --name-only "$FIRST")" != "$(git diff --name-only "$SECOND")" \
+            || { echo "fixture no longer shows the two baselines disagreeing"; exit 1; }
+          # and concretely: a.txt is A's commit, yet exactly one baseline
+          # attributes it to B
+          A_SEEN=0
+          grep -qx a.txt <<<"$(git diff --name-only "$FIRST")" && A_SEEN=$((A_SEEN + 1))
+          grep -qx a.txt <<<"$(git diff --name-only "$SECOND")" && A_SEEN=$((A_SEEN + 1))
+          test "$A_SEEN" -eq 1 \
+            || { echo "expected a.txt under exactly one baseline, got $A_SEEN"; exit 1; }
           echo "diff recipe: all change classes visible; degradation modes confirmed"
 
       - name: git recipes in the skills actually run
@@ -899,8 +955,10 @@ jobs:
           for want in 'merge-base --all HEAD <that head>' 'REBASE_HEAD^<n> REBASE_HEAD'                       'CHERRY_PICK_HEAD^<n> CHERRY_PICK_HEAD' 'REVERT_HEAD^<n> REVERT_HEAD'                       'rev-list --parents -n 1' 'show-toplevel' 'git diff --binary --' 'git apply --3way' 'git checkout -- ":(literal,top)$p"' 'git restore --staged -- ":(literal,top)$p"' 'done < "$PARK/tracked"' 'done < "$G/lean-park-input"' 'left in place, untracked and untouched' 'name-status -M' 'MERGE_HEAD"'                       'hash-object -t tree'; do
             grep -qF "$want" "$RUNNER_TEMP/mc-cmds.txt" || { echo "not prescribed in a code block: $want"; exit 1; }
           done
-          for want in 'cat-file -e' 'refs/heads/<default>:refs/remotes/origin/<default>' 'ls-remote --symref'; do
-            grep -qF "$want" "$RUNNER_TEMP/sr-cmds.txt" || { echo "not prescribed in a code block: $want"; exit 1; }
+          for want in 'cat-file -e' 'refs/heads/<default>:refs/remotes/origin/<default>' 'ls-remote --symref' '--json state,baseRefName' 'merge-base --all <base-ref> HEAD' '--untracked-files=all' 'refs/pull/<number>/head' '"<baseRefOid>^{commit}"'; do
+            # `--` because several of these wants start with a dash and grep
+            # would otherwise read them as its own options
+            grep -qF -- "$want" "$RUNNER_TEMP/sr-cmds.txt" || { echo "not prescribed in a code block: $want"; exit 1; }
           done
           # every prescribed git command that prints paths must disable octal escaping
           path_cmds=$(grep -E '^ *git .*(--name-only|--name-status|--porcelain)' "$RUNNER_TEMP/mc-cmds.txt" || true)
@@ -972,6 +1030,37 @@ jobs:
           # outside the fenced blocks the loop above checks
           grep -qF 'Never fall back to `@{upstream}`' "$S"
           grep -qF 'baseRefOid' "$S"
+          # 0.17.6's audit batch. Each sentence below is the only thing standing
+          # between the recipe and a measured failure it used to walk into, and
+          # none of them is a command, so the fenced-block loop cannot see them.
+          for want in 'require `OPEN`' \
+                      'no git remotes found' \
+                      '--is-shallow-repository' \
+                      'git fetch --unshallow' \
+                      'not a statement separator in PowerShell' \
+                      'single** bare value is the base ref' \
+                      'multiple merge bases; the diff baseline is ambiguous' \
+                      'truncated side is **`HEAD`**' \
+                      'on its own and reading its exit code'; do
+            grep -qF -- "$want" "$S" || { echo "prose anchor gone from $S: $want"; exit 1; }
+          done
+          # The fenced blocks have to stay runnable when the caller is driving
+          # PowerShell, which the installer supports on Windows. Measured on
+          # 5.1: `||` is a *parse*-time error, so the line never runs and no
+          # `try` catches it; and an unquoted `^{commit}` is read as a script
+          # block, so git exits 129 and an object that IS present reads as
+          # missing. A bare `--deepen` is not a flag either (exit 129).
+          for bad in '||' '--deepen ' '--deepen"'; do
+            if grep -qF -- "$bad" "$RUNNER_TEMP/sr-cmds.txt"; then
+              echo "not portable to PowerShell / not a valid flag, as a prescribed command: $bad"; exit 1
+            fi
+          done
+          if grep -qE '\-\-deepen$' "$RUNNER_TEMP/sr-cmds.txt"; then
+            echo "bare --deepen at end of line is back as a prescribed command"; exit 1
+          fi
+          if grep -qE 'cat-file -e [^"]*\^\{commit\}' "$RUNNER_TEMP/sr-cmds.txt"; then
+            echo "the ^{commit} argument lost its quotes; PowerShell reads it as a script block"; exit 1
+          fi
           # and what they must never say again - each of these shipped as a bug once
           for bad in 'diff --name-only HEAD MERGE_HEAD' 'diff --name-status -M HEAD MERGE_HEAD' 'diff --cached --name-only HEAD'; do
             if grep -qF "$bad" "$M"; then echo "retired mistake is back in $M: $bad"; exit 1; fi
@@ -1067,6 +1156,27 @@ jobs:
           test "$(git merge-base HEAD '@{upstream}')" = "$(git rev-parse HEAD)"
           test -z "$(git diff --name-only "$(git merge-base HEAD '@{upstream}')")"
           git merge-base HEAD origin/main >/dev/null
+          # ...and the PARTLY pushed case, which is the one that does not look
+          # broken. An empty diff is conspicuous; this one is not. Push a commit,
+          # add another on top, and @{upstream} yields a non-empty and entirely
+          # plausible diff that silently omits the work already pushed - so the
+          # report reads as complete while covering only the tail of the change.
+          printf 'p1\n' > p1.txt; git add -A; git commit -qm pushed1
+          git push -q origin feature
+          printf 'u1\n' > u1.txt; git add -A; git commit -qm unpushed1
+          UP_BASE=$(git merge-base HEAD '@{upstream}')
+          test "$UP_BASE" != "$(git rev-parse HEAD)"
+          UP_DIFF=$(git diff --name-only "$UP_BASE")
+          test -n "$UP_DIFF" \
+            || { echo "fixture no longer shows @{upstream} giving a non-empty partial diff"; exit 1; }
+          grep -qx u1.txt <<<"$UP_DIFF"
+          if grep -qx p1.txt <<<"$UP_DIFF"; then
+            echo "fixture no longer shows @{upstream} hiding already-pushed work"; exit 1
+          fi
+          # the real base sees both halves
+          TRUE_DIFF=$(git diff --name-only "$(git merge-base HEAD origin/main)")
+          grep -qx p1.txt <<<"$TRUE_DIFF"
+          grep -qx u1.txt <<<"$TRUE_DIFF"
 
           # a PR's baseRefName is a branch name, not a usable ref
           git push -q origin HEAD:dev

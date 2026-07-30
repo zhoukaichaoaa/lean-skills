@@ -267,6 +267,25 @@ CASES = [
         'skills/spec-review/SKILL.md',
         '   git symbolic-ref refs/remotes/origin/HEAD     # offline fallback; see the caveat below',
         '   git merge-base HEAD @{upstream}                # offline fallback; see the caveat below')),
+    # 0.17.6's audit batch. Each of these is a measured failure, so each needs a
+    # standing red rather than a one-off demonstration in the report.
+    ('skill: the PR lookup stops asking for state', 'rec', lambda: edit(
+        'skills/spec-review/SKILL.md',
+        'gh pr view --json state,baseRefName,baseRefOid,isCrossRepository',
+        'gh pr view --json baseRefName,baseRefOid,isCrossRepository')),
+    ("skill: spec-review's merge-base loses --all", 'rec', lambda: edit(
+        'skills/spec-review/SKILL.md',
+        'git merge-base --all <base-ref> HEAD', 'git merge-base <base-ref> HEAD')),
+    ('skill: the untracked probe loses -uall', 'rec', lambda: edit(
+        'skills/spec-review/SKILL.md',
+        'git status --porcelain --untracked-files=all', 'git status --porcelain')),
+    ('skill: the ^{commit} peel loses its quotes', 'rec', lambda: edit(
+        'skills/spec-review/SKILL.md',
+        'git cat-file -e "<baseRefOid>^{commit}"   # exit 0 = present',
+        'git cat-file -e <baseRefOid>^{commit}   # exit 0 = present')),
+    ('skill: the fork-PR fetch drops refs/pull', 'rec', lambda: edit(
+        'skills/spec-review/SKILL.md',
+        'git fetch origin "refs/pull/<number>/head"', 'git fetch upstream <baseRefName>')),
     ('skill: parks with git stash again', 'rec', lambda: edit(
         'skills/resolving-merge-conflicts/SKILL.md', PARK_GOOD, PARK_STASH)),
     ('skill: merge-base loses --all', 'rec', lambda: edit(

@@ -1,5 +1,107 @@
 # Changelog
 
+## 0.17.6 — 2026-07-30
+
+`spec-review` 的盲审修复批：**12 条 findings 全部落地,每条先实测复现再动手**。基线解析是这个技能唯一的输入,取错了base 之后所有 findings 都是虚构的 —— 本批修的全部集中在这一段。
+
+### 三条高危
+
+**PR 查询补 `state`,非 `OPEN` 一律按「没有 PR」处理。** `gh pr view` 解析的是分支的**最近**一个 PR,不是它未合并的那个。在一个 PR 已合并的分支上原样跑第 26 行的命令：
+
+```
+{"baseRefName":"main","baseRefOid":"ff75b1cda518d813f4d5da9d8bc1fa2488872ff3","isCrossRepository":false}
+rc=0
+```
+
+**rc=0,负载里没有任何一处说明这个 PR 已经完结。** 那个 `baseRefOid` 是它合并当时钉住的历史值,拿它当基线会把已合并的提交重新混进评审。加 `state` 后同一次调用答 `"state":"MERGED"`,可判。
+
+**`git status --porcelain` 补 `--untracked-files=all`。** 默认形态把整个未跟踪目录折叠成一行,文件名一个都不出现：
+
+```
+默认:                    ?? src/
+--untracked-files=all:   ?? src/newfeature/a.py
+                         ?? src/newfeature/deep/b.py
+                         ?? src/newfeature/deep/c.py
+```
+
+一整块新功能读作一个词。与 0.17.4 修过的那条同族。
+
+**`merge-base` 一律 `--all`,多于一个 SHA 时报「多祖先、diff 基线有歧义」并停。** 交叉合并（两个分支各自 merge 对方合并之前的旧 tip）留下多个等价基线,裸式静默挑一个。实测两个基线给出**两份不同的变更清单**：
+
+```
+merge-base --all  ->  5e69f76  99cb56f
+merge-base        ->  5e69f76           (静默挑一个)
+从 5e69f76 起 diff:  b.txt  b2.txt
+从 99cb56f 起 diff:  a.txt  b2.txt      <- a.txt 是对方分支创建的
+```
+
+`a.txt` 由 A 分支的提交创建,却在其中一个基线下被列成本分支的变更,在另一个基线下消失。**从 diff 本身看不出发生了哪一种。**
+
+### 五条中危
+
+- **非 GitHub / 无 remote 仓库补出口。** 原文「`gh` 失败即停」对两种失败是错的：`no git remotes found`（纯本地仓库）与 `none of the git remotes … point to a known GitHub host`（GitLab 等）。这两条是关于**仓库**而非关于 `gh` 的事实,不存在被漏掉的 PR。现在走 step 2 或 step 3,并写明走了哪条。
+- **删掉「询问用户」,`--deepen` 补参数。** fork 子代理没有问答轮次,原文让它「问过再深化」是无法执行的；改为报出将要跑的命令并停。裸 `git fetch --deepen` 本身也非法：rc=129,`option 'deepen' requires a value`,须 `--deepen=<n>` 或 `--unshallow`。
+- **浅克隆的病因方向纠正 —— 浅的是 `HEAD` 侧,不是 base 侧。** 实测把 base 分支完整 fetch 进来（5 个提交全在,`cat-file -e` 通过）,`merge-base` 依然失败,因为 `.git/shallow` 里的 graft 边界**就是 HEAD 自己**。原文让人再去 fetch base,对准的是错的一侧。同时两种失败签名**字面相同**（无共同历史与浅克隆都是 rc=1 且零输出,靠 rc 分不出）,改用 `git rev-parse --is-shallow-repository` 区分；ref 真的不在才是 rc=128 带 `fatal:`。
+- **`^{commit}` 加引号,且不再用 `||` 串联。** 双平台硬规矩（README 第 2 条）。PowerShell 5.1 下：不加引号,`{commit}` 被读作 script block,git 在自己的参数解析上 rc=129 —— 一个**确实存在**的对象读成缺失,于是配方去 fetch、recheck 再失败、报「base 无法解析」。而 `||` 更糟,它是**解析期**错误（`The token '||' is not a valid statement separator in this version.`）,整行根本不执行,连 `try` 都捕获不到。改成三条独立命令 + 散文写条件,两个 shell 下行为一致。
+- **fork PR 补取法。** 原文只说 base 在 upstream 远端,没给命令。补 `git fetch origin "refs/pull/<number>/head"` —— 任何 GitHub 远端都提供,不需要第二个 remote 也不需要写权限。
+
+### 四条低危
+
+- 两个默认分支查询**输出形状不同**（`ls-remote --symref` 给 `refs/heads/trunk`,`symbolic-ref` 给 `refs/remotes/origin/master`）,而下面的 refspec 自带两侧前缀,须取裸分支名；整段贴进去会拼出 `+refs/heads/refs/heads/trunk:…`,什么都取不到。
+- 单个裸参数一律当 base ref,不按「看着像路径」去猜。
+- `@{upstream}` 禁令的症状补齐**部分推送**一档。原文只写了「diff 为空」——那是全部推送的情形,而且空 diff 显眼。部分推送时 merge-base 落在最后一个已推送的提交上,diff **非空且完全合理**,漏掉的恰好是已推送的那部分工作,报告读起来是完整的。
+- `.plans` 的 `--git-common-dir` 改为**单独取值并读退出码**。非仓库时它 rc=128,但内嵌成 `"$(…)/../.plans"` 时 fatal 走 stderr、替换塌成空串,路径变成 `/../.plans` —— 一个 git 从未说出口的、位于文件系统根部的绝对路径,而且它可能真的存在。
+
+### 新承诺配新守门
+
+五条新变异（`rec` leg,常驻）：PR 查询丢 `state`、`merge-base` 丢 `--all`、未跟踪探针丢 `-uall`、`^{commit}` 丢引号、fork 取法丢 `refs/pull`。加上原有七条,`skill:` 一类共 12 条 —— **12/12 抓到,0 跳过,基线 rc=0。**
+
+CI 侧新增两个实测夹具而非仅字符串断言：未跟踪目录折叠（两半都断言 —— 默认形态**看不见**文件名,`-uall` 看得见,git 哪天不再折叠也会说话）、交叉合并双祖先（断言 `--all` 给两个、裸式给一个、两个基线的文件清单不相等,且 `a.txt` 恰好在其中一个基线下被归给对方）。`@{upstream}` 的部分推送症状也补了实测。
+
+九条散文锚点入 CI —— 这些是警告而不是命令,fenced-block 循环看不见它们。
+
+**一个自己踩到的坑：**`grep -qF "$want"` 在 want 以 `-` 开头时把它当选项（`grep: unknown option -- json state,baseRefName`）。原有的 want 没有一个以 `-` 开头,所以这个缺陷一直没暴露。三处循环补 `--`。
+
+### 正文按次付费,解释散文砍回去
+
+这个技能是 `context: fork`,正文全额进子代理上下文。12 条修完后 1379 → 2167 词（**+57%**）。外部验收判定**砍**,理由是防拆守卫的职能已经由 5 条变异红证 + 2 个 CI 夹具 + 9 条散文锚在**测试层**承担了,完整理由 NOTICE 与本条目也已记档 —— 正文不必再背一遍。
+
+F9 / F10 / F12 三条低危的解释段各压成一行（它们恰好也是全文件证据最薄的三段：只有字符串断言,没有运行时红证）;F1–F8 顺带掉了四处纯推论的半句。
+
+```
+2167 → 2025 词,砍 142;相对 0.17.5 的 1379 词仍 +47%
+```
+
+**守卫命令与断言一字未动**,9 条散文锚与 5 条代码块锚全部保留 —— F10 与 F12 的锚就压在留下的那一行里（`single** bare value is the base ref`、`on its own and reading its exit code`）。
+
+F3 的「从 diff 看不出发生了哪一种」**没有压**：它不是前句的重复,而是在说*你无法自检*,正是那条「停」的理由。压不动的不硬压。
+
+### 顺手修正
+
+- 发布清单第 3 条写着「两个 manifest 的版本号（**三处**）」,实际是**四处** —— `marketplace.json` 里还有一个 `"ref": "v<版本>"`,它写的是下一个标签。这一行 0.17.0 就引入了,清单从那时起一直少数一处。已改。
+- `grep -qF "$want"` 在 want 以 `-` 开头时把它当选项。**这是一个从 0.9.2 潜伏至今的缺陷** —— 原有的 want 没有一个以 `-` 开头,所以它一直没有机会暴露。本批加 `--json state,…` 时当场炸出来（`grep: unknown option -- json state,baseRefName`）,三处循环补 `--`。
+- 未跟踪目录夹具原本只建两个文件,而它上面的注释写着「Measured: three files」。数字与出处不自洽,补齐第三个文件（`deep/c.py`）并同步断言,与红例一致。
+- `REPORT-v0.17.6.md` 里「三条低危解释段约 120 词」是估的,实测 **189 词**（F10 35 / F9 59 / F12 95）。已更正,并注明 F12 那段有一部分是原有 worktree/submodule 说明的重构、可回收的净增量小于此数。
+
+### 验证
+
+本轮**全部重跑**,不是沿用上一版的数字：
+
+```
+锚点             5 run_rollback calls, 5 anchors read, 0 stale
+变异全套         6 条 leg 基线全 rc=0,40/40 抓到,1 平台性跳过,零 SETUP
+                 其中 skill 一类 12/12（7 旧 + 5 新）
+停靠矩阵         42 / 0 / 0
+逐条回滚         5 条全抓,0 幸存,0 跳过
+崩溃注入         37 / 0 / 8
+安装器 POSIX     21 / 0 / 0
+安装器 Windows   28 / 0 / 0（Windows PowerShell 5.1;本机无 pwsh 7,那条腿靠 CI）
+platform parity  rc=0
+shellcheck       配方两块零豁免 clean;install.sh clean;测试脚本 clean（0.11.0）
+```
+
+详见 REPORT-v0.17.6.md（评审工件,不入库）。
+
 ## 0.17.5 — 2026-07-30
 
 停靠机制简化计划第 4 步：**未跟踪侧从「接管」改为「告知」**。本版主体是**删代码**。
@@ -58,9 +160,9 @@ restore  git restore --staged -- ':(literal,top)$p'
 
 ### 触发率 eval 首次有数据
 
-`tests/eval/` 入库（脚本与 fixture；原始 transcript 与 results 不入库，本地留档）。数字与局限写在 README 适用边界，**技能调用率与行为达成注记两数并给**：三次“漏触”经核 transcript 确认**都真跑了测试、真定位到了 bug**，只是没调 Skill 工具；正 5 的1 00% 未误触标注为 `disable-model-invocation` 的**结构性保证**，不是判断力。
+`tests/eval/` 入库（脚本与 fixture；原始 transcript 与 results 不入库，本地留档）。数字与局限写在 README 适用边界，**技能调用率与行为达成注记两数并给**：三次“漏触”经核 transcript 确认**都真跑了测试、真定位到了 bug**，只是没调 Skill 工具；正 5 的 100% 未误触标注为 `disable-model-invocation` 的**结构性保证**，不是判断力。
 
-**验证**：矩阵 **42 / 0 / 0**；回滚 **5 条全拓、0 幸存、0 跳过**；锚点 5/5/0 stale；崩溃注入 **37 / 0 / 8**；安装器矩阵 21 / 0 / 0；变异 6 条 leg 基线全 rc=0、**35/35 拓到、1 跳过、零 SETUP**。详见 [REPORT-v0.17.5.md](REPORT-v0.17.5.md)。
+**验证**：矩阵 **42 / 0 / 0**；回滚 **5 条全抓、0 幸存、0 跳过**；锚点 5/5/0 stale；崩溃注入 **37 / 0 / 8**；安装器矩阵 21 / 0 / 0；变异 6 条 leg 基线全 rc=0、**35/35 抓到、1 跳过、零 SETUP**。详见 [REPORT-v0.17.5.md](REPORT-v0.17.5.md)。
 
 ## 0.17.4 — 2026-07-30
 

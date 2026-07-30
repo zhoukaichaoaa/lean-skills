@@ -210,7 +210,7 @@ cd lean-skills
 
 1. **标签一经推送即不可变。** 发版前确认 `git ls-remote --tags origin` 里没有该标签；任何修复走新版本号，绝不 `tag -f`。v0.9.0 的标签被移动过一次，同一版本号在不同时间指向不同内容 —— 那是错误做法，不会再有第二次。
 2. **任何改动都要 Windows 与 macOS 双平台落地，并各自有断言。** `install.sh` 与 `install.ps1` 同时改；CI 步骤默认 `if: runner.os != 'Windows'`，单平台步骤必须在 `platform parity` 的豁免表里写明理由。一端有断言、另一端没有，等于没有。
-3. 改 `.claude-plugin/` 两个 manifest 的版本号（三处）。
+3. 改 `.claude-plugin/` 两个 manifest 的版本号（**四处**）：`plugin.json` 一处，`marketplace.json` 三处 —— 其中一处是 `"ref": "v<版本>"`，它写的是**下一个**标签，先随提交落地、CI 全绿后才打那个标签。这条清单从 0.17.0 引入 `ref` 起一直写着“三处”，直到 0.17.6 才对上。
 4. **更新 NOTICE 的逐文件行**，并重算词数。口径是 **`awk '{n+=NF}END{print n}' <file>`** —— 不用 `wc -w`，它的结果随 locale 和 GNU/BSD 实现而变（同一份文件 851 vs 877），写进文档就无法复核。CI 会重算每个箭头的**右侧**（本仓库这一端）并比对；左侧的上游数字要自己按顶部钉住的那两个提交复核。
 5. 更新 CHANGELOG。
 6. **本地把 CI 的每条腿在干净克隆上原样跑一遍。** 这一步已经抓到过四个只在 CI 里才会暴露的 bug。
