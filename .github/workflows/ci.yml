@@ -1262,8 +1262,11 @@ jobs:
           for old in v0.17.0; do
             sh tests/fixture.sh "$old" skills/resolving-merge-conflicts/SKILL.md \
               "$RUNNER_TEMP/old-$old.md" "the parking matrix must reject $old's recipe"
-            if bash tests/parking_matrix.sh "$RUNNER_TEMP/old-$old.md" >/dev/null 2>&1; then
-              echo "$old's recipe passes the parking matrix; it should not"; exit 1
+            if sh tests/can_stage.sh "$RUNNER_TEMP/old-$old.md" \
+                 "the parking matrix must reject $old's recipe"; then
+              if bash tests/parking_matrix.sh "$RUNNER_TEMP/old-$old.md" >/dev/null 2>&1; then
+                echo "$old's recipe passes the parking matrix; it should not"; exit 1
+              fi
             fi
           done
           # Cheap first: every rollback anchor must resolve to exactly one line
@@ -1309,6 +1312,8 @@ jobs:
           for old in v0.17.2; do
             sh tests/fixture.sh "$old" skills/resolving-merge-conflicts/SKILL.md \
               "$RUNNER_TEMP/old-$old.md" "the crash suite must fail on $old at the move/manifest window"
+            sh tests/can_stage.sh "$RUNNER_TEMP/old-$old.md" \
+              "the crash suite must fail on $old at the move/manifest window" || continue
             rc=0
             bash tests/parking_crash.sh "$RUNNER_TEMP/old-$old.md" > "$RUNNER_TEMP/red-$old.log" 2>&1 || rc=$?
             if [ "$rc" -eq 0 ]; then
@@ -1338,15 +1343,31 @@ jobs:
           # are not random though: fixed seed, fixed target version, fixed wording.
           # So they are pinned, and this is also the only place the property test
           # runs on anything but the author's Windows box.
+          # The v0.17.0 target is GNU-only, and not because of anything in this
+          # harness. That release builds its pathspecs with `xargs -0 -a`, and
+          # `-a` is a GNU extension BSD xargs rejects outright - it is the very
+          # fault 0.17.1 was released to fix. On macOS the recipe dies at that
+          # line, the tree is therefore untouched, and the property test
+          # correctly reports no violation. The word-split RED is real on GNU
+          # platforms and simply cannot be staged here.
+          #
+          # So: skipped, said out loud, and never counted as a pass. (v0.17.2 has
+          # no such problem - it feeds xargs by redirection - which is why the
+          # crash RED below runs everywhere.)
           sh tests/fixture.sh v0.17.0 skills/resolving-merge-conflicts/SKILL.md \
             "$RUNNER_TEMP/pp-0170.md" "the property test must catch v0.17.0's word-split"
+          if sh tests/can_stage.sh "$RUNNER_TEMP/pp-0170.md" \
+               "the property test must catch v0.17.0's word-split"; then
+            rc=0
+            bash tests/parking_property.sh -n 12 -s 1000 -k "$RUNNER_TEMP/pp-0170.md" > "$RUNNER_TEMP/pp-red1.log" 2>&1 || rc=$?
+            [ "$rc" -ne 0 ] || { echo "the property test passes v0.17.0, whose diff word-splits paths with spaces; it must not"; exit 1; }
+            grep -qF 'tree differs from before and NO state file points at anything' "$RUNNER_TEMP/pp-red1.log" \
+              || { echo "v0.17.0 RED changed its reason:"; tail -5 "$RUNNER_TEMP/pp-red1.log"; exit 1; }
+          fi
           sh tests/fixture.sh v0.17.2 skills/resolving-merge-conflicts/SKILL.md \
             "$RUNNER_TEMP/pp-0172.md" "the property test must catch v0.17.2's manifest defect under crash"
-          rc=0
-          bash tests/parking_property.sh -n 12 -s 1000 -k "$RUNNER_TEMP/pp-0170.md" > "$RUNNER_TEMP/pp-red1.log" 2>&1 || rc=$?
-          [ "$rc" -ne 0 ] || { echo "the property test passes v0.17.0, whose diff word-splits paths with spaces; it must not"; exit 1; }
-          grep -qF 'tree differs from before and NO state file points at anything' "$RUNNER_TEMP/pp-red1.log" \
-            || { echo "v0.17.0 RED changed its reason:"; tail -5 "$RUNNER_TEMP/pp-red1.log"; exit 1; }
+          if sh tests/can_stage.sh "$RUNNER_TEMP/pp-0172.md" \
+               "the property test must catch v0.17.2's manifest defect under crash"; then
           rc=0
           bash tests/parking_property.sh -n 30 -s 7000 -c -k "$RUNNER_TEMP/pp-0172.md" > "$RUNNER_TEMP/pp-red2.log" 2>&1 || rc=$?
           [ "$rc" -ne 0 ] || { echo "the property test passes v0.17.2 under crash injection; it must not"; exit 1; }
@@ -1357,8 +1378,11 @@ jobs:
           # the difference.
           grep -qE 'held \./.+ while its path in the tree was free' "$RUNNER_TEMP/pp-red2.log" \
             || { echo "v0.17.2 crash RED changed its reason, or reports an empty path:"; tail -5 "$RUNNER_TEMP/pp-red2.log"; exit 1; }
-          # ...and the same seeds must be GREEN on the current recipe. A harness
-          # that fails everything is red for free and proves nothing.
+          fi
+          # ...and the same seeds must be GREEN on the current recipe. This runs
+          # unconditionally: it exercises the CURRENT recipe, so no old-release
+          # staging problem can excuse skipping it. A harness that fails
+          # everything is red for free and proves nothing.
           bash tests/parking_property.sh -n 12 -s 1000 > "$RUNNER_TEMP/pp-green1.log" 2>&1 \
             || { echo "the property test fails the CURRENT recipe on the v0.17.0 seeds:"; tail -5 "$RUNNER_TEMP/pp-green1.log"; exit 1; }
           bash tests/parking_property.sh -n 30 -s 7000 -c > "$RUNNER_TEMP/pp-green2.log" 2>&1 \
@@ -1392,8 +1416,11 @@ jobs:
           for old in v0.12.0 v0.13.1; do
             sh tests/fixture.sh "$old" install.sh "$RUNNER_TEMP/old-$old.sh" \
               "the installer matrix must reject $old's install.sh"
-            if bash tests/install_matrix.sh "$RUNNER_TEMP/old-$old.sh" >/dev/null 2>&1; then
-              echo "$old passes the installer matrix; it should not"; exit 1
+            if sh tests/can_stage.sh "$RUNNER_TEMP/old-$old.sh" \
+                 "the installer matrix must reject $old's install.sh"; then
+              if bash tests/install_matrix.sh "$RUNNER_TEMP/old-$old.sh" >/dev/null 2>&1; then
+                echo "$old passes the installer matrix; it should not"; exit 1
+              fi
             fi
           done
 

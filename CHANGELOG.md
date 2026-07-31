@@ -75,6 +75,12 @@ crash injection: 144 cases actually died (SIGKILL), 56 never reached the kill, 0
   >
   > 顺带把诊断从 `tail -3` 换成完整的 FAIL/skip 名单：上一版红的时候，日志只给了一行 detail，看不出到底少了哪两条。
 - **属性测试两维**：靶版本 + 期望报错文案一并钉上。v0.17.0 必须报 `tree differs from before and NO state file points at anything`；v0.17.2 崩溃维必须报 `held <path> while its path in the tree was free`，而且**正则要求那个 `<path>` 非空**（`held \./.+ while`）—— 空路径正是本批踩过的假红形态：`rev` 在 MSYS 不存在，提取出空串，判据退化成「任何变化都算违例」，红得毫无道理，却和真红长得一模一样。
+
+  > **v0.17.0 那一维在 macOS 上摆不出来，按跳过记账。** 推上去 macOS 又红了一次，这回不是 harness 的毛病，是靶版本选得不对：v0.17.0 的 park 用 `xargs -0 -a "$PARK/input"` 建 pathspec，而 **`-a` 是 GNU 扩展，BSD xargs 直接拒绝** —— 那正是 0.17.1 发布出来要修的东西。于是在 macOS 上那份配方走到那行就死了，工作区分毫未动，属性测试如实报告「没有违例」，RED 自然摆不出来。
+  >
+  > 处理:探针 `xargs -a /dev/null true`，不支持就**跳过并大声说明**（`gate skipped (counted, NOT a pass)`），绝不折进通过数。v0.17.2 没有这个问题（它用重定向喂 xargs），所以崩溃维那条在两个平台都跑。
+  >
+  > 顺带一个不好听但真实的结论:**没有哪个已发布版本是「能在 macOS 上跑、且带着词分割缺陷」的** —— 0.17.1 把 `xargs -a` 和拆词一起修了。所以这一维的 macOS 覆盖不是「暂缺」，是**不存在可用的靶子**。
 - **同一批种子在当前配方上必须绿**：一个什么都失败的 harness 是免费的红，证明不了任何事。
 
 **`passed` 与 `skipped` 故意不钉**：有多少注入点能解析是 bash 版本的属性，Linux 与 macOS runner 可能给出不同的数；失败的**名字**不会。
@@ -117,6 +123,22 @@ git show v9.9.9:install.ps1    -> LASTEXITCODE=128, 0 字节
 - 七处门闸全部改走它（PowerShell 那处按同样契约内联：`$LASTEXITCODE` + 空文件检查 + 同样的 `fixture ok:` 输出）。
 - `actions/checkout` 加 `fetch-depth: 0`，标签这才够得到。
 - `fixture.sh` 进 shellcheck（`-s sh`）：它现在是七处门闸共同的单点，它坏了就一起哑。
+
+### 全量前置探针：`tests/can_stage.sh`
+
+v0.17.0 那一维是靠「推上去、等 macOS 红」才发现摆不出来的。同一类问题不该再等第二次，所以**所有执行旧版本配方/脚本的门闸**都加了前置探针。
+
+与 `fixture.sh` 是一对：那个管**够不够得到** fixture，这个管**够到了能不能开台**。
+
+只探**阻断类**构造（让旧配方跑不到被测那行的东西），清单不是想出来的，是 0.17.1 逐条记下来的：`xargs -a`（BSD 报 illegal option）、`dirname --`（BSD dirname 不收选项）、`find -quit`（并非每个 find 都有）。每条都**问平台本身**而不是猜 `uname` —— 问题不是「这是不是 macOS」，是「这个 xargs 收不收 `-a`」。
+
+**不探行为差异**：`tr -cd '\0'` 与 `tr -d -c '\000'` 结果不同但不停机，配方跑得动，门闸就该开口。
+
+**一个必须做对的细节**：先剥注释再匹配。v0.17.2 的 park 里有一句注释写着「`xargs -a` is a GNU extension that BSD/macOS xargs rejects」—— 拿原文 grep，会因为一句**关于该缺陷的说明**，把修好它的那个版本判成不可开台。实测：v0.17.2 全文 4 处 `xargs`，剥注释后匹配 **0** 处。
+
+跳过时打印 `gate skipped (counted, NOT a pass): <门闸名>` 加一行阻断原因，**单独计数，永不折进通过数**。带探针的门闸与两平台预期见 REPORT 的表。
+
+**合成靶版本不做**：要让 v0.17.0 那一维在 macOS 上也能上演，只能造一个「能跑 BSD 且仍带拆词缺陷」的合成配方。那与「fixture 必须是已发布标签」有张力 —— 已发布标签是不可争辩的事实，合成配方是自己写的东西。崩溃套件的 doctored 脚本是同类先例，所以此路可行，但应单独立项论证，不夹在这批顺手做。macOS 这一维当下的诚实状态就是：无可用靶，显式跳过。
 
 ### 同一个洞的第二张面孔：`mutations.py` 里那些门闸也从未执行
 
