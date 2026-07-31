@@ -1,5 +1,84 @@
 # Changelog
 
+## 0.17.8 — 2026-07-31
+
+外部盲审对 0.17.5–0.17.7 的新进代码出具 1 高 3 中 4 低 2 提示，全部附实证复现。**逐条修复，审计者的复现配方就是红例靶子** —— 每条先按复现造红，修后转绿。
+
+### H1 · 不变量弱于宣称：宣布 HELD 之后，改坏内容与新增垃圾都放行
+
+state-(b) 分支只问一件事：「消失的路径，它的位置还被占着吗」。于是两件事从底下走过去：**内容被改坏**（路径还在，直接 `continue`），以及**新增垃圾**（循环只走 before 快照，after 里多出来的东西从不入检）。
+
+审计者的证明方式是造一个恶意 restore —— 不应用补丁、改写一个从未停靠的文件、丢下垃圾，然后照常宣布 hold。DELETE 变体 0过5红；**CORRUPT 与 LITTER 同种子 6过0红**。
+
+重写后语义是三条：宣布 HELD 时，每个 before 路径要么字节级一致，要么**属于 `$PARK/tracked` 记录的被扣集合**（它的改动躺在没应用上的补丁里）；快照对比**双向**，after 里凭空出现的路径同样违例；消失一律违例。三个变体现在各由对应判据抓住：
+
+```
+DELETE   lost ./conflicted.txt entirely: not in the tree, not in the parking area
+CORRUPT  changed ./conflicted.txt, which the hold does not account for
+LITTER   restore left ./litter.txt behind, and nothing accounts for it
+```
+
+（顺带落实提示 I2：路径消失时按实况分流措辞 —— 在停车区里说 `held … while its path in the tree was free`，纯粹被毁说 `lost … entirely`。判定不变，v0.17.2 的 RED 文案因此仍然成立。）
+
+### M1 · 模式检查从未比较过任何东西
+
+`case $(ls -l -- "$f") in *x*)` —— **每个生成名都以 `.txt` 结尾，而 `txt` 的中间就是 x**。模式匹配到的是文件名，所有文件恒报 mode x。改用 `[ -x "$f" ]`。
+
+挖下去还有一层：这台机器的文件系统**根本不保留可执行位**（`chmod +x` 后 `ls -l` 分毫不变），而生成器仍对四分之一的文件调 `chmod +x` —— 那些案例在 Windows 上什么都没测，却计入通过数。加 `CAN_EXEC` 探针，单独计数。
+
+### M2 · `defaultBranch=trunk` 时整套跑在无冲突的仓库上
+
+`git checkout master 2>/dev/null || git checkout main` —— 两者皆败、stderr 被吞、冲突从未造出，而所有用例照常「通过」。实测 `GIT_CONFIG_GLOBAL` 设 trunk：**8/8 全绿**。
+
+改为 `git init -b main` 固定分支名，并加防御断言：造完冲突后必须真有冲突态（`MERGE_HEAD` / `CHERRY_PICK_HEAD` / `rebase-*` 目录 / 冲突标记，四者之一），否则**退出 2 中止整轮**。夹具坏了不是「跳过一个用例」，是「停下来」。
+
+### M3 · 出错的跑次被记为反例 clean
+
+`tests/eval/grade.py`：反例场景只要 forbidden 没触发就算 clean —— 而 CLI 崩掉的那一次，transcript 是空的，**当然不会有 forbidden 触发**。那是「因为崩溃而得分」。
+
+改为先读 `run.json` 的 `is_error` / `subtype`，errored 单独成列，从 clean 的**分子分母同时剔除**。红例（合成 `is_error=true` + 空 transcript）：旧代码 `clean rate 2/2 = 100%`，新代码 `0/0 = n/a` 加 `!! 2 run(s) errored (counted, NOT clean)`。分母为零时打 `n/a` 而不是 `0%` —— 后者读起来像一次测到的失败。
+
+### L1 · 退出账目：什么都没测也算绿
+
+`-n 0` 与 `-n banana` 旧 rc=**0**，输出 `0 passed, 0 failed, 0 skipped`。现在：参数先验整数（非法 rc=2）；绿的条件是 **attempted == requested 且至少有一例被评分且 fail == 0**，全跳过不得绿。
+
+### L2 · `can_stage.sh` 的 exit 2 是「失效开放」
+
+五个调用点都把非零当作「跳过这个门闸」，所以内部错误（参数不对、文件读不到）会**静默地解除一处门闸**，与这套机制取代掉的 `|| continue` 一模一样。改为与 `fixture.sh` 同语义：内部错误也喊 `CI GATE BROKEN`。
+
+**「响亮」不等于「拦住」。** 只喊 `CI GATE BROKEN` 是不够的：五个调用点写的是 `if sh can_stage.sh …; then`，rc=2 和 rc=1 一样落进 else，**一条腿可以带着那行字绿着通过**。两层都补上：源头五处分流（rc=2 直接 `exit 1`，rc=1 仍为计数跳过），外加 `can_stage.sh` 在内部错误时落一个 `$RUNNER_TEMP/gate-broken` 标记、由两个相关 step 收尾检查 —— 防的是将来新增的调用点忘了分流。用标记文件而不是 grep 日志，因为 step 的日志不是脚本能直接 grep 的东西。
+
+### L3 · 注入点落在续接行时，跑的是另一份配方
+
+行尾是 `||` / `&&` / `\` 时，追加的 `kill -9 $$` 变成那个操作符的右操作数 —— 跑的已经不是被测配方，却被记作一次有效的非崩溃。当前 park 块有两处（第 22、73 行），结局良性，但**良性不等于记在账上**。这类行移出可注入集，并单独报数。
+
+### L4 · 行级探针看不见被反斜杠拆开的构造
+
+`can_stage.sh` 逐行 grep，而
+```
+xargs -0 \
+    -a "$PARK/input"
+```
+对 shell 是一条命令、对 grep 是两行。改为先用 POSIX `sed` 循环合并续行。红例（真续行夹具，非 heredoc 写出 —— 那会吃掉反斜杠）：旧判「可开台」，新判阻断。
+
+### I1 · 杀点与冲突形状共用一条 LCG
+
+生成器用 `rnd 3` 抽形状，注入器接着从同一状态抽杀点，于是**案例数是 3 的倍数时每个杀点锁死单一形状**（实测 N=45 只覆盖 135 组合中的 45；N=44 覆盖全部 132）。改为两条独立流，都从同一种子派生 —— 可复现性不变，只是不再同步行走。
+
+### 验证
+
+```
+属性测试 非崩溃 200   200 / 0 / 0   symlink 114 生成   可执行位 0 生成 / 59 平台跳过
+属性测试 崩溃   200   200 / 0 / 0   symlink 127 生成   可执行位 0 生成 / 56 平台跳过
+                      154 例真的 SIGKILL,46 例未达注入点,2 行按 L3 移出可注入集
+RED v0.17.0           10 passed, 2 failed   （文案不变）
+RED v0.17.2 崩溃      29 passed, 1 failed   抓到的正是 line 69 —— mv/manifest 窗口本身
+```
+
+**RED v0.17.2 的红从 3 条变成 1 条,是 I1 的直接副作用**:杀点改用独立 PRNG 流之后,同一种子挑中的注入点整体位移,命中那个窄窗口的次数随之改变。红证本身没有变弱 —— 它抓的仍是 `line 69`,CI 钉的 `held <path> while its path in the tree was free` 文案照旧成立。窄窗口靠例数堆命中率这件事,本来就写在 REPORT 的"未验证"清单里。
+
+各条红例的旧/新对照、以及三处我自己在做这批时的失误(把 M1 误判为审计出错、L1 首次复现方法错、用 heredoc 造 L4 夹具被吃掉反斜杠),逐条记在 REPORT-v0.17.8.md。
+
 ## 0.17.7 — 2026-07-31
 
 停靠机制简化计划第 5 步：**属性测试**。新增 `tests/parking_property.sh`。

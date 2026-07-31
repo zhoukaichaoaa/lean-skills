@@ -45,6 +45,16 @@ while [ $# -gt 0 ]; do
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+# Validate rather than trust. `-n banana` used to make every arithmetic
+# comparison false, so the loop ran zero times and the script exited 0 having
+# tested nothing; `-n 0` did the same thing on purpose.
+case $CASES in
+  ''|*[!0-9]*) echo "-n needs a non-negative integer, got: $CASES" >&2; exit 2 ;;
+esac
+case $SEED in
+  ''|*[!0-9]*) echo "-s needs a non-negative integer, got: $SEED" >&2; exit 2 ;;
+esac
+[ "$CASES" -gt 0 ] || { echo "-n must be at least 1" >&2; exit 2; }
 [ -f "$SKILL" ] || { echo "no skill at $SKILL" >&2; exit 2; }
 SKILL=$(cd "$(dirname "$SKILL")" && pwd)/$(basename "$SKILL")
 
@@ -69,6 +79,16 @@ CAN_LINK=1
 ( cd "$W" && ln -s target probe 2>/dev/null && [ -L probe ] ) || CAN_LINK=0
 rm -f "$W/probe"
 
+# Does this filesystem carry the executable bit at all? On NTFS under Git Bash
+# it does not: `chmod +x` returns 0 and leaves the mode exactly as it was. The
+# generator used to flip that bit on a quarter of its files regardless, so on
+# Windows those cases exercised nothing while counting as passes - the same
+# flattering arithmetic this suite bans everywhere else. Probed, and counted
+# separately when absent.
+CAN_EXEC=1
+( cd "$W" && printf '' > execprobe && chmod +x execprobe && [ -x execprobe ] ) 2>/dev/null || CAN_EXEC=0
+rm -f "$W/execprobe"
+
 pass=0; fail=0; skip=0
 nocrash=0; unparseable=0
 FAILED_SEEDS=
@@ -83,10 +103,12 @@ snapshot() {
     if [ -L "$f" ]; then
       printf '%s link %s\n' "$f" "$(readlink -- "$f")"
     else
-      case $(ls -l -- "$f") in
-        *x*) m=x ;;
-        *) m=- ;;
-      esac
+      # `[ -x ]`, not a glob over `ls -l`. The old spelling was
+      # `case $(ls -l -- "$f") in *x*)`, and every generated name ends in
+      # `.txt` - whose middle letter is an x. So the pattern matched the
+      # FILENAME, every file reported mode x, and this dimension compared
+      # nothing at all. Byte-dumping the ls output is what settled it.
+      if [ -x "$f" ]; then m=x; else m=-; fi
       printf '%s file%s %s\n' "$f" "$m" "$(git hash-object -- "$f")"
     fi
   done
@@ -127,11 +149,31 @@ rnd() {
   RVAL=$(( (RSTATE / 65536) % $1 ))
 }
 
+# A second, independent stream for choosing the kill point.
+#
+# Sharing one stream tied the kill point to the conflict shape: the generator
+# draws the shape with `rnd 3` and the injector then drew from whatever state
+# that left, so with the case count a multiple of 3 each kill point locked onto
+# a single shape (measured: N=45 reached 45 of 135 combinations; N=44 reached
+# all 132). Both streams are still derived from the same seed, so a run remains
+# exactly reproducible - they just no longer walk in step.
+KSTATE=0
+krnd() {
+  KSTATE=$(( (KSTATE * 1103515245 + 12345) & 0x7FFFFFFF ))
+  KVAL=$(( (KSTATE / 65536) % $1 ))
+}
+
 # Build a repo with a random in-flight state on top of a random conflict.
 # Echoes the paths it put on park's input list.
 build_case() {
   d=$1
-  rm -rf "$d"; git init -q "$d" || return 1
+  # `-b main`, not whatever init.defaultBranch happens to say. The old code
+  # created the repo with the ambient default and then did
+  # `git checkout master 2>/dev/null || git checkout main`, so on a box
+  # configured with defaultBranch=trunk BOTH failed, stderr went to /dev/null,
+  # no conflict was ever created, and every case ran against a clean repo and
+  # passed. Measured: 8/8 "passed" that way.
+  rm -rf "$d"; git init -q -b main "$d" || return 1
   cd "$d" || return 1
   git config user.email t@t; git config user.name t
   git config commit.gpgsign false
@@ -146,7 +188,7 @@ build_case() {
   git checkout -qb other
   printf 'theirs\n' > conflicted.txt
   git commit -aqm theirs
-  git checkout -q master 2>/dev/null || git checkout -q main
+  git checkout -q main
   printf 'mine\n' > conflicted.txt
   git commit -aqm mine
   rnd 3
@@ -155,6 +197,17 @@ build_case() {
     1) git rebase other      >/dev/null 2>&1 ;;
     2) git cherry-pick other >/dev/null 2>&1 ;;
   esac
+  # ...and it must ACTUALLY be a conflict. A generator that quietly produces
+  # clean repositories reports a clean sweep and proves nothing, which is
+  # exactly what the defaultBranch bug did. Exit 2 rather than 1: a broken
+  # fixture is not a case to skip, it is a reason to stop.
+  if ! git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 &&
+     ! git rev-parse -q --verify CHERRY_PICK_HEAD >/dev/null 2>&1 &&
+     [ ! -d .git/rebase-merge ] && [ ! -d .git/rebase-apply ] &&
+     ! grep -q '^<<<<<<<' conflicted.txt 2>/dev/null; then
+    echo "FIXTURE BROKEN: operation $RVAL left no conflict; the case would test nothing" >&2
+    return 2
+  fi
 
   # ...and a random pile of in-flight work on top of it
   rnd 6; n=$((1 + RVAL))
@@ -198,7 +251,14 @@ build_case() {
       else
         printf 'staged in flight\n' > "$p"; git add -- "$p" >/dev/null 2>&1
       fi
-      rnd 4; [ "$RVAL" -eq 0 ] && chmod +x -- "$p" 2>/dev/null
+      rnd 4
+      if [ "$RVAL" -eq 0 ]; then
+        if [ "$CAN_EXEC" -eq 1 ]; then
+          chmod +x -- "$p" 2>/dev/null && echo x >> "$W/execmade"
+        else
+          echo x >> "$W/execskip"
+        fi
+      fi
     else
       # untracked: park must leave these exactly where they are
       printf 'brand new\n' > "$p" || continue
@@ -267,27 +327,72 @@ check() {
     # parking area with its path in the tree free. The byte comparison above
     # cannot see it - the area exists, the state file exists, restore even named
     # the path. Only "was anything actually blocking it?" separates the two.
+    # WHAT A HOLD MAY AND MAY NOT EXCUSE.
+    #
+    # It excuses exactly one thing: the paths park recorded in $PARK/tracked,
+    # whose edits are sitting in a patch that would not apply. Those are allowed
+    # to differ from BEFORE - that is what being held means.
+    #
+    # It excuses nothing else. A path restore never parked must come back byte
+    # for byte; a path that vanished is a loss whatever the area says; and
+    # nothing may appear that was not there before.
+    #
+    # The first version of this asked only "did a vanished path's slot stay
+    # occupied". Audited against a deliberately malicious restore - one that
+    # skips the patch, rewrites a file it never parked, drops litter, and
+    # announces a hold as usual - that check passed 6 of 6. Both directions
+    # below are what make it fail.
     printf '%s\n' "$BEFORE" > "$W/chk-before"
     printf '%s\n' "$now"    > "$W/chk-after"
+    : > "$W/chk-held"
+    if [ -s "$pk/tracked" ]; then
+      while IFS= read -r -d '' hp; do
+        printf './%s\n' "$hp" >> "$W/chk-held"
+      done < "$pk/tracked"
+    fi
+    in_area() {   # $1 worktree-relative path -> 0 when the area is holding it
+      rel=${1#./}
+      [ -e "$pk/untracked/$rel" ] || [ -L "$pk/untracked/$rel" ]
+    }
+    # Strip the two trailing fields (type, then hash or link target) to get the
+    # path back. Parameter expansion, not `rev | cut`: MSYS has no `rev`, and
+    # that spelling silently produced an empty path - a red for the wrong
+    # reason, indistinguishable from a real one until someone reads the message
+    # and sees no path in it. Shortest-suffix match handles names with spaces,
+    # including two in a row and a trailing one.
+    #
+    # (i) everything that existed before
     while IFS= read -r line; do
       [ -n "$line" ] || continue
       grep -qxF -- "$line" "$W/chk-after" && continue
-      # Strip the two trailing fields (type, then hash or link target) to get
-      # the path back. Parameter expansion, not `rev | cut`: MSYS/Git Bash has
-      # no `rev`, so that spelling silently produced an empty path and turned
-      # this clause into "anything that changed is a violation" - a red for the
-      # wrong reason, which is indistinguishable from a real one until someone
-      # reads the message and sees no path in it. Shortest-suffix match handles
-      # names with spaces, including two in a row and a trailing one.
       p=${line% * *}
       [ -n "$p" ] || {
         echo "internal: cannot parse a snapshot line: $line"; exit 1; }
-      # present in some form? then it changed rather than vanished, and the
-      # byte comparison is what judges that
-      { [ -e "$p" ] || [ -L "$p" ]; } && continue
-      echo "held $p while its path in the tree was free"
-      exit 1
+      if [ -e "$p" ] || [ -L "$p" ]; then
+        # still there, but not byte-identical. Only the parked set may differ.
+        grep -qxF -- "$p" "$W/chk-held" || {
+          echo "changed $p, which the hold does not account for"; exit 1; }
+      else
+        # gone from the tree. Report which kind, because they read very
+        # differently to whoever has to act on it - but both are violations.
+        if in_area "$p"; then
+          echo "held $p while its path in the tree was free"
+        else
+          echo "lost $p entirely: not in the tree, not in the parking area"
+        fi
+        exit 1
+      fi
     done < "$W/chk-before"
+    # (ii) ...and the other direction, which the first version never looked at
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      grep -qxF -- "$line" "$W/chk-before" && continue
+      p=${line% * *}
+      [ -n "$p" ] || {
+        echo "internal: cannot parse a snapshot line: $line"; exit 1; }
+      grep -qxF -- "$p" "$W/chk-held" || {
+        echo "restore left $p behind, and nothing accounts for it"; exit 1; }
+    done < "$W/chk-after"
     exit 0
   )
 }
@@ -302,8 +407,17 @@ while [ "$c" -lt "$CASES" ]; do
   c=$((c + 1))
   s=$((SEED + c))
   RSTATE=$s
+  KSTATE=$(( (s * 2654435761 + 1013904223) & 0x7FFFFFFF ))
   d="$W/case"
-  if ! ( build_case "$d" ) >/dev/null 2>&1; then
+  brc=0
+  ( build_case "$d" ) > "$W/build.log" 2>&1 || brc=$?
+  if [ "$brc" -eq 2 ]; then
+    # a broken fixture is not a skip. Skipping it is how a suite ends up
+    # reporting a sweep of passes over repositories that had nothing to test.
+    echo "FIXTURE BROKEN at seed $s:"
+    sed 's/^/    /' "$W/build.log"
+    exit 2
+  elif [ "$brc" -ne 0 ]; then
     skip=$((skip + 1))
     continue
   fi
@@ -333,10 +447,18 @@ while [ "$c" -lt "$CASES" ]; do
   }
   KILLED_AT=-
   if [ "$CRASH" -eq 1 ]; then
-    PTS=$(awk 'NF && $1 !~ /^#/ {print NR}' "$W/park.sh")
+    # A line ending in `||`, `&&` or a backslash is not an injection point:
+    # appending `kill -9 $$` after it makes the kill that operator's right-hand
+    # operand, so what runs is a different recipe from the one under test and
+    # the case gets banked as a valid non-crash. The current park block has two
+    # such lines (22 and 73); both were verified benign, but benign is not
+    # accounted for.
+    PTS=$(awk 'NF && $1 !~ /^#/ {
+        if ($0 ~ /\|\|[ \t]*$/ || $0 ~ /&&[ \t]*$/ || $0 ~ /\\[ \t]*$/) next
+        print NR }' "$W/park.sh")
     set -- $PTS
-    rnd $#
-    k=$(eval echo "\${$(( RVAL + 1 ))}")
+    krnd $#
+    k=$(eval echo "\${$(( KVAL + 1 ))}")
     awk -v k="$k" 'NR==k {print; print "kill -9 $$"; next} {print}' "$W/park.sh" > "$W/park-c.sh"
     if bash -n "$W/park-c.sh" 2>/dev/null; then
       runpark "$W/park-c.sh"; prc=$?
@@ -402,11 +524,30 @@ echo "$pass passed, $fail failed, $skip skipped"
 made=0; [ -f "$W/linkmade" ] && made=$(wc -l < "$W/linkmade")
 lskip=0; [ -f "$W/linkskip" ] && lskip=$(wc -l < "$W/linkskip")
 echo "symlink shapes: $made generated, $lskip skipped for lack of platform support"
+xmade=0; [ -f "$W/execmade" ] && xmade=$(wc -l < "$W/execmade")
+xskip=0; [ -f "$W/execskip" ] && xskip=$(wc -l < "$W/execskip")
+echo "executable-bit shapes: $xmade generated, $xskip skipped for lack of platform support"
 # Crash coverage is reported separately for the same reason: a case whose
 # injected kill never fired is a real case, but it is not crash evidence, and
 # folding it in would overstate what this run proved.
 if [ "$CRASH" -eq 1 ]; then
   echo "crash injection: $((pass + fail - nocrash - unparseable)) cases actually died (SIGKILL), $nocrash never reached the kill, $unparseable injection points unparseable"
+  nexcl=$(awk 'NF && $1 !~ /^#/ && ($0 ~ /\|\|[ 	]*$/ || $0 ~ /&&[ 	]*$/ || $0 ~ /\[ 	]*$/)' "$W/park.sh" | grep -c . || true)
+  echo "  ($nexcl line(s) excluded from the injection set: a kill appended there would become the right-hand side of a continuation operator)"
 fi
 [ -z "$FAILED_SEEDS" ] || echo "reproduce:$(for s in $FAILED_SEEDS; do printf ' -n 1 -s %s' $((s - 1)); done)"
+
+# Green means something was actually proved. `fail == 0` on its own is true of
+# a run that graded nothing at all - every case skipped, or the loop never
+# entered. Require that as many cases were attempted as were asked for, and
+# that at least one of them was graded.
+attempted=$((pass + fail + skip))
+if [ "$attempted" -ne "$CASES" ]; then
+  echo "attempted $attempted of $CASES requested cases - not a clean run" >&2
+  exit 1
+fi
+if [ "$((pass + fail))" -eq 0 ]; then
+  echo "every case was skipped; nothing was graded" >&2
+  exit 1
+fi
 [ "$fail" -eq 0 ]

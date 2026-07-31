@@ -1262,8 +1262,12 @@ jobs:
           for old in v0.17.0; do
             sh tests/fixture.sh "$old" skills/resolving-merge-conflicts/SKILL.md \
               "$RUNNER_TEMP/old-$old.md" "the parking matrix must reject $old's recipe"
-            if sh tests/can_stage.sh "$RUNNER_TEMP/old-$old.md" \
-                 "the parking matrix must reject $old's recipe"; then
+            crc=0
+            sh tests/can_stage.sh "$RUNNER_TEMP/old-$old.md" \
+              "the parking matrix must reject $old's recipe" || crc=$?
+            # rc=2 is the probe itself failing, not an unstageable fixture: stop.
+            [ "$crc" -ne 2 ] || exit 1
+            if [ "$crc" -eq 0 ]; then
               if bash tests/parking_matrix.sh "$RUNNER_TEMP/old-$old.md" >/dev/null 2>&1; then
                 echo "$old's recipe passes the parking matrix; it should not"; exit 1
               fi
@@ -1312,8 +1316,12 @@ jobs:
           for old in v0.17.2; do
             sh tests/fixture.sh "$old" skills/resolving-merge-conflicts/SKILL.md \
               "$RUNNER_TEMP/old-$old.md" "the crash suite must fail on $old at the move/manifest window"
+            crc=0
             sh tests/can_stage.sh "$RUNNER_TEMP/old-$old.md" \
-              "the crash suite must fail on $old at the move/manifest window" || continue
+              "the crash suite must fail on $old at the move/manifest window" || crc=$?
+            # rc=2 is the probe itself failing, not an unstageable fixture: stop.
+            [ "$crc" -ne 2 ] || exit 1
+            [ "$crc" -eq 0 ] || continue
             rc=0
             bash tests/parking_crash.sh "$RUNNER_TEMP/old-$old.md" > "$RUNNER_TEMP/red-$old.log" 2>&1 || rc=$?
             if [ "$rc" -eq 0 ]; then
@@ -1356,8 +1364,12 @@ jobs:
           # crash RED below runs everywhere.)
           sh tests/fixture.sh v0.17.0 skills/resolving-merge-conflicts/SKILL.md \
             "$RUNNER_TEMP/pp-0170.md" "the property test must catch v0.17.0's word-split"
-          if sh tests/can_stage.sh "$RUNNER_TEMP/pp-0170.md" \
-               "the property test must catch v0.17.0's word-split"; then
+          crc=0
+          sh tests/can_stage.sh "$RUNNER_TEMP/pp-0170.md" \
+            "the property test must catch v0.17.0's word-split" || crc=$?
+          # rc=2 is the probe itself failing, not an unstageable fixture: stop.
+          [ "$crc" -ne 2 ] || exit 1
+          if [ "$crc" -eq 0 ]; then
             rc=0
             bash tests/parking_property.sh -n 12 -s 1000 -k "$RUNNER_TEMP/pp-0170.md" > "$RUNNER_TEMP/pp-red1.log" 2>&1 || rc=$?
             [ "$rc" -ne 0 ] || { echo "the property test passes v0.17.0, whose diff word-splits paths with spaces; it must not"; exit 1; }
@@ -1366,8 +1378,12 @@ jobs:
           fi
           sh tests/fixture.sh v0.17.2 skills/resolving-merge-conflicts/SKILL.md \
             "$RUNNER_TEMP/pp-0172.md" "the property test must catch v0.17.2's manifest defect under crash"
-          if sh tests/can_stage.sh "$RUNNER_TEMP/pp-0172.md" \
-               "the property test must catch v0.17.2's manifest defect under crash"; then
+          crc=0
+          sh tests/can_stage.sh "$RUNNER_TEMP/pp-0172.md" \
+            "the property test must catch v0.17.2's manifest defect under crash" || crc=$?
+          # rc=2 is the probe itself failing, not an unstageable fixture: stop.
+          [ "$crc" -ne 2 ] || exit 1
+          if [ "$crc" -eq 0 ]; then
           rc=0
           bash tests/parking_property.sh -n 30 -s 7000 -c -k "$RUNNER_TEMP/pp-0172.md" > "$RUNNER_TEMP/pp-red2.log" 2>&1 || rc=$?
           [ "$rc" -ne 0 ] || { echo "the property test passes v0.17.2 under crash injection; it must not"; exit 1; }
@@ -1401,6 +1417,12 @@ jobs:
             grep -qF '(0 skipped)' "$RUNNER_TEMP/rb.log" \
               || { echo "a rollback was skipped on Linux, where none may be"; exit 1; }
           fi
+          # Backstop for the probe itself. can_stage.sh drops this marker on any
+          # internal failure. Each call site above already routes rc=2 to a hard
+          # stop; this catches a call site added later that forgets to, so a leg
+          # can never carry "CI GATE BROKEN" in its log and still go green.
+          [ ! -e "$RUNNER_TEMP/gate-broken" ] || {
+            echo "a gate probe reported CI GATE BROKEN; this leg proved nothing"; exit 1; }
 
       - name: installer state matrix, driven from the real install.sh
         if: runner.os != 'Windows'
@@ -1416,13 +1438,23 @@ jobs:
           for old in v0.12.0 v0.13.1; do
             sh tests/fixture.sh "$old" install.sh "$RUNNER_TEMP/old-$old.sh" \
               "the installer matrix must reject $old's install.sh"
-            if sh tests/can_stage.sh "$RUNNER_TEMP/old-$old.sh" \
-                 "the installer matrix must reject $old's install.sh"; then
+            crc=0
+            sh tests/can_stage.sh "$RUNNER_TEMP/old-$old.sh" \
+              "the installer matrix must reject $old's install.sh" || crc=$?
+            # rc=2 is the probe itself failing, not an unstageable fixture: stop.
+            [ "$crc" -ne 2 ] || exit 1
+            if [ "$crc" -eq 0 ]; then
               if bash tests/install_matrix.sh "$RUNNER_TEMP/old-$old.sh" >/dev/null 2>&1; then
                 echo "$old passes the installer matrix; it should not"; exit 1
               fi
             fi
           done
+          # Backstop for the probe itself. can_stage.sh drops this marker on any
+          # internal failure. Each call site above already routes rc=2 to a hard
+          # stop; this catches a call site added later that forgets to, so a leg
+          # can never carry "CI GATE BROKEN" in its log and still go green.
+          [ ! -e "$RUNNER_TEMP/gate-broken" ] || {
+            echo "a gate probe reported CI GATE BROKEN; this leg proved nothing"; exit 1; }
 
       - name: worktree and plan-path recipes actually run
         if: runner.os != 'Windows'

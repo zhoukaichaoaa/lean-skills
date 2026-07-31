@@ -26,10 +26,29 @@
 # can still be staged and should be allowed to speak.
 set -eu
 
-[ $# -eq 2 ] || { echo "can_stage.sh: need <file> <gate>" >&2; exit 2; }
+# Internal errors speak in the same voice as fixture.sh, and for the same
+# reason: every call site treats a non-zero exit as "skip this gate", so a
+# quiet exit 2 would disarm a gate exactly as silently as the `|| continue`
+# this whole mechanism replaced. If the caller cannot even hand us a file, the
+# gate is broken, not unstageable.
+# Two layers, because "loud" is not "blocking". Every call site routes rc=2 to
+# a hard stop, and this also drops a marker the step checks on its way out - so
+# a call site added later that forgets the routing still cannot let a broken
+# probe through quietly. Same reasoning as fixture.sh: make forgetting
+# structurally impossible rather than trusting each site to remember.
+broken() {
+  echo "CI GATE BROKEN: $1" >&2
+  [ -z "${2:-}" ] || echo "  this probe guards: $2" >&2
+  if [ -n "${RUNNER_TEMP:-}" ] && [ -d "$RUNNER_TEMP" ]; then
+    : > "$RUNNER_TEMP/gate-broken" 2>/dev/null || true
+  fi
+  exit 2
+}
+
+[ $# -eq 2 ] || broken "can_stage.sh needs <file> <gate>"
 f=$1
 gate=$2
-[ -f "$f" ] || { echo "can_stage.sh: no such file: $f" >&2; exit 2; }
+[ -f "$f" ] || broken "can_stage.sh cannot read '$f'" "$gate"
 
 # Comments are stripped first, and that is load-bearing: v0.17.2's park carries
 # the sentence "`xargs -a` is a GNU extension that BSD/macOS xargs rejects" in a
@@ -40,7 +59,13 @@ gate=$2
 # recipe's own comments are indented `#` lines in either form, and the markdown
 # prose around them does not spell these constructs the way a command line does.
 # Verified both ways against v0.17.0 (blocked) and v0.17.2 (stageable).
-body=$(grep -v '^[[:space:]]*#' "$f" || true)
+# Backslash continuations are joined first. A construct split across lines -
+#     xargs -0 \
+#         -a "$PARK/input"
+# is one command to the shell and two lines to grep, so a line-at-a-time probe
+# would call that recipe stageable and let the gate run something that cannot.
+body=$(sed -e :a -e '/\\$/N; s/\\\n[[:space:]]*//; ta' "$f" |
+       grep -v '^[[:space:]]*#' || true)
 
 skip() {
   echo "gate skipped (counted, NOT a pass): $gate"

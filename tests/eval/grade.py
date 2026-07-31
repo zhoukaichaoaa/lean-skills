@@ -108,6 +108,29 @@ def run_cost(run_json_path):
         return 0.0
 
 
+def run_errored(run_json_path):
+    """True when the CLI itself failed this run.
+
+    A run that errored proves nothing about triggering: the transcript may be
+    empty or truncated, no forbidden skill can appear in it, and the negative
+    scenarios therefore scored it `clean`. That is a pass awarded for the run
+    having crashed. Errored runs are now counted on their own line and taken
+    out of both halves of the clean ratio.
+
+    A missing or unparseable run.json is treated as errored for the same
+    reason: nothing about it can be trusted.
+    """
+    try:
+        with open(run_json_path, "r", encoding="utf-8", errors="replace") as fh:
+            d = json.load(fh)
+    except Exception:
+        return True
+    if d.get("is_error") is True:
+        return True
+    subtype = d.get("subtype")
+    return subtype is not None and subtype != "success"
+
+
 def run_models(run_json_path):
     try:
         with open(run_json_path, "r", encoding="utf-8", errors="replace") as fh:
@@ -147,7 +170,7 @@ def grade(out_dir):
         runs = sorted(
             f for f in os.listdir(sdir) if re.match(r"^run\d+\.json$", f)
         )
-        hits = misses = false_fires = no_transcript = 0
+        hits = misses = false_fires = no_transcript = errored = 0
         observed = {}
         per_run = []
         for run_json in runs:
@@ -157,6 +180,14 @@ def grade(out_dir):
             total_cost += run_cost(os.path.join(sdir, run_json))
             for m in run_models(os.path.join(sdir, run_json)):
                 all_models.add(m)
+
+            # Before anything is scored: did this run even complete? An errored
+            # run used to score `clean` on the negative scenarios, because no
+            # forbidden skill can appear in a transcript the CLI never wrote.
+            if run_errored(os.path.join(sdir, run_json)):
+                errored += 1
+                per_run.append({"run": idx, "verdict": "errored"})
+                continue
 
             if invoked is None:
                 no_transcript += 1
@@ -210,6 +241,7 @@ def grade(out_dir):
             "misses": misses,
             "false_fires": false_fires,
             "no_transcript": no_transcript,
+            "errored": errored,
             "observed": observed,
         })
         detail[scenario] = per_run
@@ -226,34 +258,41 @@ def grade(out_dir):
     print("total cost  : $%.2f" % total_cost)
     print()
 
-    hdr = "%-19s %-31s %3s %5s %5s %6s" % (
-        "scenario", "expected skill", "N", "hit", "miss", "false")
+    hdr = "%-19s %-31s %3s %5s %5s %6s %5s" % (
+        "scenario", "expected skill", "N", "hit", "miss", "false", "err")
     print(hdr)
     print("-" * len(hdr))
     for r in rows:
         exp = ", ".join(r["expected"]) if r["expected"] else "(none - must stay quiet)"
-        print("%-19s %-31s %3d %5d %5d %6d" % (
-            r["scenario"], exp[:31], r["n"], r["hits"], r["misses"], r["false_fires"]))
+        print("%-19s %-31s %3d %5d %5d %6d %5d" % (
+            r["scenario"], exp[:31], r["n"], r["hits"], r["misses"],
+            r["false_fires"], r["errored"]))
     print()
 
     for r in rows:
-        # A run with no transcript was not measured; it must not be counted as
-        # a miss, and it must not sit in the denominator either.
-        graded = r["n"] - r["no_transcript"]
+        # Neither a run without a transcript nor a run the CLI errored on was
+        # measured. Both come out of the numerator AND the denominator: an
+        # errored run used to be scored `clean` on the negative scenarios,
+        # which is a pass awarded for having crashed.
+        graded = r["n"] - r["no_transcript"] - r["errored"]
         r["graded"] = graded
-        den = graded or 1
+        # No percentage when nothing was graded: "0/0 = 0%" reads as a
+        # measured failure, and this is the absence of a measurement.
+        pct = ("%.0f%%" % (100.0 * r["hits"] / graded)) if graded else "n/a"
         if r["expected"]:
-            print("%-19s trigger rate %d/%d = %.0f%%" % (
-                r["scenario"], r["hits"], graded, 100.0 * r["hits"] / den))
+            print("%-19s trigger rate %d/%d = %s" % (
+                r["scenario"], r["hits"], graded, pct))
         else:
-            print("%-19s clean rate   %d/%d = %.0f%%  (false fires: %d)" % (
-                r["scenario"], r["hits"], graded, 100.0 * r["hits"] / den,
-                r["false_fires"]))
+            print("%-19s clean rate   %d/%d = %s  (false fires: %d)" % (
+                r["scenario"], r["hits"], graded, pct, r["false_fires"]))
         if r["observed"]:
             print("%-19s   skills seen: %s" % ("", ", ".join(
                 "%s x%d" % (k, v) for k, v in sorted(r["observed"].items()))))
         if r["no_transcript"]:
             print("%-19s   !! %d run(s) with no transcript" % ("", r["no_transcript"]))
+        if r["errored"]:
+            print("%-19s   !! %d run(s) errored (counted, NOT clean)" % (
+                "", r["errored"]))
 
     p2 = detail.get("p2-code-review")
     if p2:
